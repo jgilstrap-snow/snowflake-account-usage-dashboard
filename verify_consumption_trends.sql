@@ -1,0 +1,226 @@
+-- Consumption Trends Over Time Chart Validation
+-- This query validates the data shown in the "📈 Consumption Trends Over Time" chart
+
+-- ============================================
+-- MAIN QUERY: Daily Aggregated Credits (What the chart displays)
+-- ============================================
+-- This shows the exact data points plotted on the chart
+-- Three lines: Compute Credits (blue), Cloud Services Credits (orange), Total Credits (green dashed)
+
+SELECT 
+    DATE(START_TIME) as USAGE_DATE,
+    SUM(CREDITS_USED_COMPUTE) as COMPUTE_CREDITS,
+    SUM(CREDITS_USED_CLOUD_SERVICES) as CLOUD_SERVICES_CREDITS,
+    SUM(CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) as TOTAL_CREDITS
+FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
+  AND WAREHOUSE_ID > 0
+  AND WAREHOUSE_NAME IS NOT NULL
+GROUP BY DATE(START_TIME)
+ORDER BY USAGE_DATE DESC;
+
+-- ============================================
+-- VALIDATION: Check specific date ranges
+-- ============================================
+
+-- Last 7 days
+SELECT 
+    DATE(START_TIME) as USAGE_DATE,
+    SUM(CREDITS_USED_COMPUTE) as COMPUTE_CREDITS,
+    SUM(CREDITS_USED_CLOUD_SERVICES) as CLOUD_SERVICES_CREDITS,
+    SUM(CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) as TOTAL_CREDITS
+FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+WHERE START_TIME >= DATEADD('day', -7, CURRENT_DATE())
+  AND WAREHOUSE_ID > 0
+  AND WAREHOUSE_NAME IS NOT NULL
+GROUP BY DATE(START_TIME)
+ORDER BY USAGE_DATE DESC;
+
+-- Last 30 days
+SELECT 
+    DATE(START_TIME) as USAGE_DATE,
+    SUM(CREDITS_USED_COMPUTE) as COMPUTE_CREDITS,
+    SUM(CREDITS_USED_CLOUD_SERVICES) as CLOUD_SERVICES_CREDITS,
+    SUM(CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) as TOTAL_CREDITS
+FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+WHERE START_TIME >= DATEADD('day', -30, CURRENT_DATE())
+  AND WAREHOUSE_ID > 0
+  AND WAREHOUSE_NAME IS NOT NULL
+GROUP BY DATE(START_TIME)
+ORDER BY USAGE_DATE DESC;
+
+-- ============================================
+-- VALIDATION: Summary Statistics
+-- ============================================
+
+WITH daily_credits AS (
+    SELECT 
+        DATE(START_TIME) as USAGE_DATE,
+        SUM(CREDITS_USED_COMPUTE) as COMPUTE_CREDITS,
+        SUM(CREDITS_USED_CLOUD_SERVICES) as CLOUD_SERVICES_CREDITS,
+        SUM(CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) as TOTAL_CREDITS
+    FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+    WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
+      AND WAREHOUSE_ID > 0
+      AND WAREHOUSE_NAME IS NOT NULL
+    GROUP BY DATE(START_TIME)
+)
+SELECT 
+    'Total Days' as METRIC,
+    COUNT(*) as VALUE
+FROM daily_credits
+
+UNION ALL
+
+SELECT 
+    'Avg Daily Compute Credits',
+    ROUND(AVG(COMPUTE_CREDITS), 2)
+FROM daily_credits
+
+UNION ALL
+
+SELECT 
+    'Avg Daily Cloud Services Credits',
+    ROUND(AVG(CLOUD_SERVICES_CREDITS), 2)
+FROM daily_credits
+
+UNION ALL
+
+SELECT 
+    'Avg Daily Total Credits',
+    ROUND(AVG(TOTAL_CREDITS), 2)
+FROM daily_credits
+
+UNION ALL
+
+SELECT 
+    'Max Daily Compute Credits',
+    MAX(COMPUTE_CREDITS)
+FROM daily_credits
+
+UNION ALL
+
+SELECT 
+    'Max Daily Cloud Services Credits',
+    MAX(CLOUD_SERVICES_CREDITS)
+FROM daily_credits
+
+UNION ALL
+
+SELECT 
+    'Max Daily Total Credits',
+    MAX(TOTAL_CREDITS)
+FROM daily_credits
+
+UNION ALL
+
+SELECT 
+    'Min Daily Compute Credits',
+    MIN(COMPUTE_CREDITS)
+FROM daily_credits
+
+UNION ALL
+
+SELECT 
+    'Min Daily Cloud Services Credits',
+    MIN(CLOUD_SERVICES_CREDITS)
+FROM daily_credits
+
+UNION ALL
+
+SELECT 
+    'Min Daily Total Credits',
+    MIN(TOTAL_CREDITS)
+FROM daily_credits;
+
+-- ============================================
+-- VALIDATION: Find peak days (highest usage)
+-- ============================================
+
+WITH daily_credits AS (
+    SELECT 
+        DATE(START_TIME) as USAGE_DATE,
+        SUM(CREDITS_USED_COMPUTE) as COMPUTE_CREDITS,
+        SUM(CREDITS_USED_CLOUD_SERVICES) as CLOUD_SERVICES_CREDITS,
+        SUM(CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) as TOTAL_CREDITS
+    FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+    WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
+      AND WAREHOUSE_ID > 0
+      AND WAREHOUSE_NAME IS NOT NULL
+    GROUP BY DATE(START_TIME)
+)
+SELECT 
+    USAGE_DATE,
+    COMPUTE_CREDITS,
+    CLOUD_SERVICES_CREDITS,
+    TOTAL_CREDITS
+FROM daily_credits
+ORDER BY TOTAL_CREDITS DESC
+LIMIT 10;
+
+-- ============================================
+-- VALIDATION: Monthly aggregation (for trend analysis)
+-- ============================================
+
+SELECT 
+    DATE_TRUNC('month', START_TIME) as USAGE_MONTH,
+    SUM(CREDITS_USED_COMPUTE) as COMPUTE_CREDITS,
+    SUM(CREDITS_USED_CLOUD_SERVICES) as CLOUD_SERVICES_CREDITS,
+    SUM(CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) as TOTAL_CREDITS,
+    COUNT(DISTINCT DATE(START_TIME)) as DAYS_IN_MONTH,
+    ROUND(SUM(CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) / 
+          COUNT(DISTINCT DATE(START_TIME)), 2) as AVG_DAILY_CREDITS
+FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
+  AND WAREHOUSE_ID > 0
+  AND WAREHOUSE_NAME IS NOT NULL
+GROUP BY DATE_TRUNC('month', START_TIME)
+ORDER BY USAGE_MONTH DESC;
+
+-- ============================================
+-- VALIDATION: Check for any days with zero usage
+-- ============================================
+
+WITH all_dates AS (
+    SELECT DATEADD('day', SEQ4(), DATEADD('month', -12, CURRENT_DATE())) as CHECK_DATE
+    FROM TABLE(GENERATOR(ROWCOUNT => 365))
+    WHERE CHECK_DATE <= CURRENT_DATE()
+),
+daily_credits AS (
+    SELECT 
+        DATE(START_TIME) as USAGE_DATE,
+        SUM(CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) as TOTAL_CREDITS
+    FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+    WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
+      AND WAREHOUSE_ID > 0
+      AND WAREHOUSE_NAME IS NOT NULL
+    GROUP BY DATE(START_TIME)
+)
+SELECT 
+    a.CHECK_DATE,
+    COALESCE(d.TOTAL_CREDITS, 0) as TOTAL_CREDITS
+FROM all_dates a
+LEFT JOIN daily_credits d ON a.CHECK_DATE = d.USAGE_DATE
+WHERE COALESCE(d.TOTAL_CREDITS, 0) = 0
+ORDER BY a.CHECK_DATE DESC
+LIMIT 20;
+
+-- ============================================
+-- VALIDATION: Compare chart data format
+-- ============================================
+-- This shows data in a format that matches exactly what the chart should display
+-- Use this to spot-check specific dates shown in the chart
+
+SELECT 
+    TO_CHAR(DATE(START_TIME), 'YYYY-MM-DD') as FORMATTED_DATE,
+    SUM(CREDITS_USED_COMPUTE) as COMPUTE_CREDITS,
+    SUM(CREDITS_USED_CLOUD_SERVICES) as CLOUD_SERVICES_CREDITS,
+    SUM(CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) as TOTAL_CREDITS,
+    COUNT(DISTINCT WAREHOUSE_NAME) as WAREHOUSES_USED
+FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+WHERE START_TIME >= DATEADD('month', -1, CURRENT_DATE())
+  AND WAREHOUSE_ID > 0
+  AND WAREHOUSE_NAME IS NOT NULL
+GROUP BY DATE(START_TIME)
+ORDER BY DATE(START_TIME) DESC;
+
