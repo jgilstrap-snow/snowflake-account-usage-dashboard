@@ -1,4 +1,4 @@
-# Snowflake Cost Monitoring Dashboard
+# Snowflake Account Usage Dashboard
 
 A comprehensive Streamlit application for monitoring and analyzing Snowflake account usage costs across different service types with advanced projection capabilities and granular consumption analysis.
 
