@@ -113,15 +113,16 @@ Each section includes:
 
 ## Validation Queries
 
-The app includes test queries in the code comments for each service. To validate data:
+The app includes test queries in the code comments for some services. To validate data:
 
+Example queries for AI Services are found in the app comments:
 1. Open the app in edit mode
 2. Find the service analyzer class (e.g., `AIServicesAnalyzer`)
 3. Copy the test query from the docstring
 4. Run it in a Snowflake worksheet
 5. Compare results with the dashboard
 
-Example test queries are also provided in:
+Example test queries for storage and compute are also provided in:
 - `verify_warehouse_compute.sql`
 - `verify_consumption_trends.sql`
 
