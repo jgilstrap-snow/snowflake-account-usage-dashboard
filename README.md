@@ -122,7 +122,7 @@ Example queries for AI Services are found in the app comments:
 4. Run it in a Snowflake worksheet
 5. Compare results with the dashboard
 
-Example test queries for storage and compute are also provided in:
+Example test queries for warehouse compute and overall consumption are also provided in:
 - `verify_warehouse_compute.sql`
 - `verify_consumption_trends.sql`
 
