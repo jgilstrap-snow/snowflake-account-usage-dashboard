@@ -2,6 +2,8 @@
 
 A comprehensive Streamlit application for monitoring and analyzing Snowflake account usage costs across different service types with advanced projection capabilities and granular consumption analysis.
 
+<img width="3284" height="1812" alt="image" src="https://github.com/user-attachments/assets/babf6130-b0c0-4531-96fb-9d4e22f727af" />
+
 ## Features
 
 - **📊 Overview**: Account-wide cost summary with yearly projections and monthly trends
