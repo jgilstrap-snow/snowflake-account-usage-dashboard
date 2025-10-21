@@ -46,7 +46,7 @@ A comprehensive Streamlit application for monitoring and analyzing Snowflake acc
    snowflake-snowpark-python *
    streamlit *
 4. Click **Run** in the top right corner
-5. You may need to refresh the streamlit app to ensure the packages installed - please allow 1-2 minutes for the app to initialize. 
+5. You may need to refresh the streamlit app to ensure the packages installed - please allow 1-2 minutes for the app to initialize. You only will need to wait this long once.
 
 ### Step 3: Grant Required Permissions
 
