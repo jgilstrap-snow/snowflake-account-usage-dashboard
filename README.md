@@ -4,6 +4,9 @@ A comprehensive Streamlit application for monitoring and analyzing Snowflake acc
 
 <img width="3284" height="1812" alt="image" src="https://github.com/user-attachments/assets/babf6130-b0c0-4531-96fb-9d4e22f727af" />
 
+## Updates
+10/22 - Added `snowflake_cost_dashboard_V2.py` that includes a cache layer for the AI Services tab and speeds up subsequent page loads
+
 ## Features
 
 - **📊 Overview**: Account-wide cost summary with yearly projections and monthly trends
