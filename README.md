@@ -30,7 +30,7 @@ A comprehensive Streamlit application for monitoring and analyzing Snowflake acc
 ### Step 1: Upload the Application File
 
 1. Log into your Snowflake account via Snowsight
-2. Navigate to **Streamlit** in the left sidebar
+2. Navigate to **Projects -> Streamlit** in the left sidebar
 3. Click **+ Streamlit App**
 4. Choose:
    - **App location**: Select a database and schema (e.g., `MY_DATABASE.PUBLIC`)
@@ -50,32 +50,6 @@ A comprehensive Streamlit application for monitoring and analyzing Snowflake acc
    streamlit *
 4. Click **Run** in the top right corner
 5. You may need to refresh the streamlit app to ensure the packages installed - please allow 1-2 minutes for the app to initialize. You only will need to wait this long once.
-
-### Step 3: Grant Required Permissions
-
-The app needs access to `ACCOUNT_USAGE` views. Run these commands as `ACCOUNTADMIN`:
-
-```sql
--- Grant usage on ACCOUNT_USAGE schema to your role
-GRANT IMPORTED PRIVILEGES ON DATABASE SNOWFLAKE TO ROLE <YOUR_ROLE>;
-
--- Or create a custom role with specific grants
-CREATE ROLE IF NOT EXISTS COST_MONITORING_ROLE;
-
-GRANT USAGE ON DATABASE SNOWFLAKE TO ROLE COST_MONITORING_ROLE;
-GRANT USAGE ON SCHEMA SNOWFLAKE.ACCOUNT_USAGE TO ROLE COST_MONITORING_ROLE;
-
--- Grant access to specific views
-GRANT SELECT ON VIEW SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY TO ROLE COST_MONITORING_ROLE;
-GRANT SELECT ON VIEW SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY TO ROLE COST_MONITORING_ROLE;
-GRANT SELECT ON VIEW SNOWFLAKE.ACCOUNT_USAGE.DATABASE_STORAGE_USAGE_HISTORY TO ROLE COST_MONITORING_ROLE;
-GRANT SELECT ON VIEW SNOWFLAKE.ACCOUNT_USAGE.STAGE_STORAGE_USAGE_HISTORY TO ROLE COST_MONITORING_ROLE;
-GRANT SELECT ON VIEW SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY TO ROLE COST_MONITORING_ROLE;
--- Add other views as needed
-
--- Grant role to users
-GRANT ROLE COST_MONITORING_ROLE TO USER <USERNAME>;
-```
 
 ## Running the Application
 
