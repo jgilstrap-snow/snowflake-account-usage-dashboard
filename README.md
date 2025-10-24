@@ -42,14 +42,11 @@ A comprehensive Streamlit application for monitoring and analyzing Snowflake acc
 
 1. Delete the default code in the editor
 2. Copy and paste the entire contents of `snowflake_cost_dashboard.py`
-3. In the top left 'Packages' menu, select Python Version 3.11
-   Install and save:
-   pandas 2.3.2
-   plotly 6.3.0
-   snowflake-snowpark-python *
-   streamlit *
-4. Click **Run** in the top right corner
-5. You may need to refresh the streamlit app to ensure the packages installed - please allow 1-2 minutes for the app to initialize. You only will need to wait this long once.
+3. In the top left 'Packages' menu, select **Python Version 3.11**
+4. Search and Install:**pandas 2.3.2** , **plotly 6.3.0**
+5. Verify the latest versions are **snowflake-snowpark-python** and **streamlit** are installed
+6. Click **Run** in the top right corner
+7. You may need to refresh the streamlit app to ensure the packages installed - please allow 1-2 minutes for the app to initialize. You only will need to wait this long once.
 
 ## Running the Application
 
