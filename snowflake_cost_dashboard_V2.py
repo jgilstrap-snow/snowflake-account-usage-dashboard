@@ -1940,6 +1940,815 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         pass
 
 
+class SPCSAnalyzer(ServiceAnalyzer):
+    """
+    SPCS (Snowpark Container Services) analyzer for monitoring compute pool usage and costs.
+    Analyzes data from SNOWPARK_CONTAINER_SERVICES_HISTORY for compute pool-level insights.
+    """
+    
+    def __init__(self, data_manager, cache_ttl: int = 3600):
+        """Initialize SPCS Compute Analyzer."""
+        super().__init__("SPCS Compute", data_manager, cache_ttl)
+    
+    def render_analysis(self) -> None:
+        """
+        Main entry point for rendering SPCS compute pool analysis.
+        """
+        if not self.data_manager or not self.data_manager.session:
+            st.error("No active Snowflake session available")
+            return
+        
+        spcs_data = self.get_service_data(ViewType.WAREHOUSE)
+        
+        if spcs_data is None or spcs_data.empty:
+            st.warning("No SPCS compute pool usage data found")
+            with st.expander("**Possible Reasons & Solutions**"):
+                st.markdown("""
+                **Why might SPCS data be empty?**
+                
+                - **No Compute Pools**: No compute pools have been active recently
+                - **Data Latency**: Account usage data has up to 3-hour delay
+                - **Time Range**: No SPCS consumption in the last 12 months
+                - **Permissions**: Account may lack access to ACCOUNT_USAGE schema
+                
+                **Troubleshooting Steps:**
+                1. Verify compute pools are running services or jobs
+                2. Check your current role has ACCOUNT_USAGE schema access
+                3. Wait for data to propagate (up to 3 hours for recent usage)
+                
+                **Data Source:**
+                - SNOWFLAKE.ACCOUNT_USAGE.SNOWPARK_CONTAINER_SERVICES_HISTORY
+                """)
+            return
+        
+        self.render_spcs_metrics(spcs_data)
+        self.render_spcs_charts(spcs_data)
+    
+    def get_service_data(self, view_type: ViewType) -> Optional[pd.DataFrame]:
+        """
+        Get SPCS compute pool usage data.
+        
+        Returns:
+            Optional[pd.DataFrame]: SPCS usage data or None if error
+        """
+        cache_key = "spcs_compute_data"
+        
+        if cache_key in st.session_state.data_cache:
+            cache_time = st.session_state.cache_timestamps.get(cache_key, 0)
+            if time.time() - cache_time < self.cache_ttl:
+                return st.session_state.data_cache[cache_key]
+        
+        query = self.get_base_query(view_type)
+        
+        try:
+            with st.spinner("Loading SPCS compute pool data..."):
+                result = self.data_manager.execute_query(query)
+                
+                if result is not None and not result.empty:
+                    st.session_state.data_cache[cache_key] = result
+                    st.session_state.cache_timestamps[cache_key] = time.time()
+                    return result
+                else:
+                    return None
+                    
+        except Exception as e:
+            st.error(f"Failed to load SPCS data: {str(e)}")
+            return None
+    
+    def get_base_query(self, view_type: ViewType) -> str:
+        """
+        Generate SPCS compute pool query using SNOWPARK_CONTAINER_SERVICES_HISTORY view.
+        
+        Returns:
+            str: SQL query for SPCS compute pool data
+        """
+        return """
+        SELECT 
+            START_TIME,
+            END_TIME,
+            COMPUTE_POOL_NAME,
+            IS_EXCLUSIVE,
+            APPLICATION_NAME,
+            CREDITS_USED,
+            CREDITS_USED as TOTAL_CREDITS
+        FROM SNOWFLAKE.ACCOUNT_USAGE.SNOWPARK_CONTAINER_SERVICES_HISTORY
+        WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
+          AND START_TIME < DATEADD('hour', -24, CURRENT_TIMESTAMP())
+          AND CREDITS_USED > 0
+        ORDER BY START_TIME DESC, COMPUTE_POOL_NAME
+        """
+    
+    def render_spcs_metrics(self, data: pd.DataFrame) -> None:
+        """
+        Render SPCS compute pool metrics.
+        
+        Args:
+            data (pd.DataFrame): SPCS usage data
+        """
+        if data.empty:
+            return
+        
+        data = data.copy()
+        data['START_TIME'] = pd.to_datetime(data['START_TIME'])
+        
+        total_credits = data['CREDITS_USED'].sum()
+        unique_pools = data['COMPUTE_POOL_NAME'].nunique()
+        
+        current_month = data['START_TIME'].max().to_period('M')
+        current_month_data = data[data['START_TIME'].dt.to_period('M') == current_month]
+        current_month_credits = current_month_data['CREDITS_USED'].sum()
+        
+        prev_month = current_month - 1
+        prev_month_data = data[data['START_TIME'].dt.to_period('M') == prev_month]
+        prev_month_credits = prev_month_data['CREDITS_USED'].sum()
+        
+        if prev_month_credits > 0:
+            mom_change = ((current_month_credits - prev_month_credits) / prev_month_credits) * 100
+        else:
+            mom_change = 0
+        
+        st.markdown("#### SPCS Compute Pool Overview")
+        st.caption("Last 12 months of Snowpark Container Services usage")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                label="Total SPCS Credits (12 mo)",
+                value=format_credits_with_dollars(total_credits),
+                help="Total credits consumed by all compute pools over the last 12 months"
+            )
+        
+        with col2:
+            current_month_str = current_month.strftime('%B %Y')
+            prev_month_str = prev_month.strftime('%B %Y')
+            st.metric(
+                label=f"{current_month_str} (MTD)",
+                value=format_credits_with_dollars(current_month_credits),
+                delta=f"{mom_change:+.1f}% vs {prev_month_str}" if mom_change != 0 else None,
+                delta_color="inverse",
+                help=f"Month-to-date credits for {current_month_str}"
+            )
+        
+        with col3:
+            st.metric(
+                label="Active Compute Pools",
+                value=f"{unique_pools}",
+                help="Number of compute pools with consumption"
+            )
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            avg_daily_credits = data.groupby(data['START_TIME'].dt.date)['CREDITS_USED'].sum().mean()
+            st.metric(
+                label="Daily Average",
+                value=format_credits_with_dollars(avg_daily_credits),
+                help="Average daily SPCS credit consumption"
+            )
+        
+        with col2:
+            daily_consumption = data.groupby(data['START_TIME'].dt.date)['CREDITS_USED'].sum()
+            peak_daily = daily_consumption.max()
+            st.metric(
+                label="Peak Daily Usage",
+                value=format_credits_with_dollars(peak_daily),
+                help="Highest single-day SPCS credit consumption"
+            )
+    
+    def render_spcs_charts(self, data: pd.DataFrame) -> None:
+        """
+        Render SPCS compute pool charts and analysis.
+        
+        Args:
+            data (pd.DataFrame): SPCS usage data
+        """
+        if data.empty:
+            return
+        
+        data = data.copy()
+        data['START_TIME'] = pd.to_datetime(data['START_TIME'])
+        
+        tab1, tab2, tab3 = st.tabs(["Trends", "By Compute Pool", "Daily Patterns"])
+        
+        with tab1:
+            self.render_spcs_trends_chart(data)
+        
+        with tab2:
+            self.render_compute_pool_breakdown(data)
+        
+        with tab3:
+            self.render_spcs_daily_patterns(data)
+    
+    def render_spcs_trends_chart(self, data: pd.DataFrame) -> None:
+        """Render SPCS consumption trends over time."""
+        st.markdown("#### SPCS Consumption Over Time")
+        
+        daily_data = data.groupby(data['START_TIME'].dt.date).agg({
+            'CREDITS_USED': 'sum'
+        }).reset_index()
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(
+            x=daily_data['START_TIME'],
+            y=daily_data['CREDITS_USED'],
+            mode='lines',
+            name='SPCS Credits',
+            line=dict(color='#9467bd', width=3),
+            hovertemplate='<b>SPCS Credits</b><br>Date: %{x}<br>Credits: %{y:,.2f}<extra></extra>'
+        ))
+        
+        fig.update_layout(
+            title='Daily SPCS Credit Consumption',
+            xaxis_title='Date',
+            yaxis_title='Credits Used',
+            height=500,
+            hovermode='x unified'
+        )
+        
+        update_chart_with_time_range(
+            fig, 
+            daily_data, 
+            'START_TIME', 
+            'Date', 
+            'Daily SPCS Credit Consumption'
+        )
+        
+        render_plotly_chart(fig)
+    
+    def render_compute_pool_breakdown(self, data: pd.DataFrame) -> None:
+        """Render breakdown by compute pool."""
+        if 'START_TIME' in data.columns and len(data) > 0:
+            min_date = data['START_TIME'].min()
+            max_date = data['START_TIME'].max()
+            date_range_str = f"{min_date.strftime('%b %d, %Y')} - {max_date.strftime('%b %d, %Y')}"
+            st.markdown(f"#### Credit Consumption by Compute Pool")
+            st.caption(f"Data period: {date_range_str}")
+        else:
+            st.markdown("#### Credit Consumption by Compute Pool")
+        
+        pool_data = data.groupby('COMPUTE_POOL_NAME').agg({
+            'CREDITS_USED': 'sum'
+        }).reset_index().sort_values('CREDITS_USED', ascending=False)
+        pool_data.rename(columns={'CREDITS_USED': 'TOTAL_CREDITS'}, inplace=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            top_pools = pool_data.head(10)
+            fig_bar = px.bar(
+                top_pools,
+                x='TOTAL_CREDITS',
+                y='COMPUTE_POOL_NAME',
+                orientation='h',
+                title='Top 10 Compute Pools by Credit Consumption',
+                labels={'TOTAL_CREDITS': 'Credits Used', 'COMPUTE_POOL_NAME': 'Compute Pool'}
+            )
+            fig_bar.update_layout(height=400)
+            render_plotly_chart(fig_bar)
+        
+        with col2:
+            fig_pie = px.pie(
+                pool_data.head(8),
+                values='TOTAL_CREDITS',
+                names='COMPUTE_POOL_NAME',
+                title='Credit Distribution by Compute Pool (Top 8)'
+            )
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+            render_plotly_chart(fig_pie)
+        
+        st.markdown("#### Weekly Cost by Compute Pool")
+        
+        credit_price = st.session_state.get('credit_price', 2.0)
+        
+        weekly_pool_data = data.copy()
+        weekly_pool_data['WEEK'] = weekly_pool_data['START_TIME'].dt.to_period('W').apply(lambda x: x.start_time)
+        weekly_pool_data['WEEK_LABEL'] = weekly_pool_data['WEEK'].dt.strftime('%b %d')
+        
+        weekly_agg = weekly_pool_data.groupby(['WEEK', 'WEEK_LABEL', 'COMPUTE_POOL_NAME']).agg({
+            'CREDITS_USED': 'sum'
+        }).reset_index()
+        
+        weekly_agg['COST'] = weekly_agg['CREDITS_USED'] * credit_price
+        
+        pool_totals = weekly_agg.groupby('COMPUTE_POOL_NAME')['COST'].sum().sort_values(ascending=False)
+        all_pools = pool_totals.index.tolist()
+        
+        default_pools = all_pools[:5] if len(all_pools) > 5 else all_pools
+        selected_pools = st.multiselect(
+            "Select Compute Pools",
+            options=all_pools,
+            default=default_pools,
+            key="weekly_spcs_pool_selector"
+        )
+        
+        if not selected_pools:
+            st.info("Select at least one compute pool to display the chart.")
+            return
+        
+        chart_data = weekly_agg[weekly_agg['COMPUTE_POOL_NAME'].isin(selected_pools)].copy()
+        chart_data = chart_data.sort_values('WEEK')
+        
+        fig = go.Figure()
+        
+        colors = px.colors.qualitative.Set2
+        for i, pool in enumerate(selected_pools):
+            pool_weekly = chart_data[chart_data['COMPUTE_POOL_NAME'] == pool]
+            fig.add_trace(go.Bar(
+                x=pool_weekly['WEEK_LABEL'],
+                y=pool_weekly['COST'],
+                name=pool,
+                marker_color=colors[i % len(colors)],
+                hovertemplate='<b>%{x}</b><br>' + pool + '<br>Cost: $%{y:,.2f}<extra></extra>'
+            ))
+        
+        fig.update_layout(
+            barmode='stack',
+            title='Weekly SPCS Cost by Compute Pool',
+            xaxis_title='Week Starting',
+            yaxis_title='Cost ($)',
+            height=450,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5
+            ),
+            yaxis=dict(tickprefix='$', tickformat=',.0f')
+        )
+        
+        render_plotly_chart(fig)
+    
+    def render_spcs_daily_patterns(self, data: pd.DataFrame) -> None:
+        """Render SPCS daily and hourly patterns."""
+        st.markdown("#### SPCS Usage Patterns")
+        
+        credit_price = st.session_state.get('credit_price', 2.0)
+        
+        data = data.copy()
+        data['HOUR'] = data['START_TIME'].dt.hour
+        data['DAY_OF_WEEK'] = data['START_TIME'].dt.day_name()
+        data['COST'] = data['CREDITS_USED'] * credit_price
+        
+        hourly_stats = data.groupby('HOUR').agg({
+            'CREDITS_USED': ['sum', 'mean', 'count']
+        }).reset_index()
+        hourly_stats.columns = ['HOUR', 'sum', 'mean', 'count']
+        
+        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        daily_stats = data.groupby('DAY_OF_WEEK').agg({
+            'CREDITS_USED': ['sum', 'mean', 'count']
+        }).reset_index()
+        daily_stats.columns = ['DAY_OF_WEEK', 'sum', 'mean', 'count']
+        daily_stats['DAY_OF_WEEK'] = pd.Categorical(daily_stats['DAY_OF_WEEK'], categories=day_order, ordered=True)
+        daily_stats = daily_stats.sort_values('DAY_OF_WEEK')
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            hourly_stats['COST'] = hourly_stats['sum'] * credit_price
+            max_hourly = hourly_stats['COST'].max()
+            hourly_stats['intensity'] = hourly_stats['COST'] / max_hourly if max_hourly > 0 else 0
+            colors_hourly = [f'rgba(148, 103, 189, {0.3 + 0.7 * i})' for i in hourly_stats['intensity']]
+            
+            fig_hourly = go.Figure(data=go.Bar(
+                x=hourly_stats['HOUR'],
+                y=hourly_stats['COST'],
+                marker_color=colors_hourly,
+                hovertemplate='Hour %{x}:00<br>Total Cost: $%{y:,.2f}<extra></extra>'
+            ))
+            fig_hourly.update_layout(
+                title='Total Cost by Hour of Day',
+                xaxis_title='Hour of Day',
+                yaxis_title='Total Cost ($)',
+                height=350,
+                xaxis=dict(tickmode='linear', dtick=2),
+                yaxis=dict(tickprefix='$', tickformat=',.0f')
+            )
+            render_plotly_chart(fig_hourly)
+        
+        with col2:
+            daily_stats['COST'] = daily_stats['sum'] * credit_price
+            max_daily = daily_stats['COST'].max()
+            daily_stats['intensity'] = daily_stats['COST'] / max_daily if max_daily > 0 else 0
+            colors_daily = [f'rgba(148, 103, 189, {0.3 + 0.7 * i})' for i in daily_stats['intensity']]
+            
+            fig_daily = go.Figure(data=go.Bar(
+                x=daily_stats['DAY_OF_WEEK'],
+                y=daily_stats['COST'],
+                marker_color=colors_daily,
+                hovertemplate='%{x}<br>Total Cost: $%{y:,.2f}<extra></extra>'
+            ))
+            fig_daily.update_layout(
+                title='Total Cost by Day of Week',
+                xaxis_title='',
+                yaxis_title='Total Cost ($)',
+                height=350,
+                xaxis=dict(tickangle=-45),
+                yaxis=dict(tickprefix='$', tickformat=',.0f')
+            )
+            render_plotly_chart(fig_daily)
+    
+    def render_analysis_tabs(self, data: pd.DataFrame, view_type: ViewType) -> None:
+        """Not used - all rendering done in render_analysis()."""
+        pass
+
+
+class OpenflowAnalyzer(ServiceAnalyzer):
+    """
+    Openflow analyzer for monitoring compute pool credit usage and costs.
+    Analyzes data from METERING_HISTORY filtered by OPENFLOW_COMPUTE_SNOWFLAKE service type.
+    """
+    
+    def __init__(self, data_manager, cache_ttl: int = 3600):
+        """Initialize Openflow Analyzer."""
+        super().__init__("Openflow", data_manager, cache_ttl)
+    
+    def render_analysis(self) -> None:
+        """Main entry point for rendering Openflow compute analysis."""
+        if not self.data_manager or not self.data_manager.session:
+            st.error("No active Snowflake session available")
+            return
+        
+        openflow_data = self.get_service_data(ViewType.WAREHOUSE)
+        
+        if openflow_data is None or openflow_data.empty:
+            st.warning("No Openflow usage data found")
+            with st.expander("**Possible Reasons & Solutions**"):
+                st.markdown("""
+                **Why might Openflow data be empty?**
+                
+                - **No Runtimes**: No Openflow runtimes have been active recently
+                - **Data Latency**: Account usage data has up to 3-hour delay
+                - **Time Range**: No Openflow consumption in the last 12 months
+                - **Permissions**: Account may lack access to ACCOUNT_USAGE schema
+                
+                **Troubleshooting Steps:**
+                1. Verify Openflow runtimes are deployed and running
+                2. Check your current role has ACCOUNT_USAGE schema access
+                3. Wait for data to propagate (up to 3 hours for recent usage)
+                
+                **Data Source:**
+                - SNOWFLAKE.ACCOUNT_USAGE.METERING_HISTORY (SERVICE_TYPE = OPENFLOW_COMPUTE_SNOWFLAKE)
+                """)
+            return
+        
+        self.render_openflow_metrics(openflow_data)
+        self.render_openflow_charts(openflow_data)
+    
+    def get_service_data(self, view_type: ViewType) -> Optional[pd.DataFrame]:
+        """Get Openflow usage data with caching."""
+        cache_key = "openflow_data"
+        
+        if cache_key in st.session_state.data_cache:
+            cache_time = st.session_state.cache_timestamps.get(cache_key, 0)
+            if time.time() - cache_time < self.cache_ttl:
+                return st.session_state.data_cache[cache_key]
+        
+        query = self.get_base_query(view_type)
+        
+        try:
+            with st.spinner("Loading Openflow data..."):
+                result = self.data_manager.execute_query(query)
+                
+                if result is not None and not result.empty:
+                    st.session_state.data_cache[cache_key] = result
+                    st.session_state.cache_timestamps[cache_key] = time.time()
+                    return result
+                else:
+                    return None
+                    
+        except Exception as e:
+            st.error(f"Failed to load Openflow data: {str(e)}")
+            return None
+    
+    def get_base_query(self, view_type: ViewType) -> str:
+        """Generate Openflow query using METERING_HISTORY view."""
+        return """
+        SELECT 
+            START_TIME,
+            END_TIME,
+            NAME as COMPUTE_POOL_NAME,
+            CREDITS_USED_COMPUTE,
+            CREDITS_USED_CLOUD_SERVICES,
+            CREDITS_USED as TOTAL_CREDITS
+        FROM SNOWFLAKE.ACCOUNT_USAGE.METERING_HISTORY
+        WHERE SERVICE_TYPE = 'OPENFLOW_COMPUTE_SNOWFLAKE'
+          AND START_TIME >= DATEADD('month', -12, CURRENT_DATE())
+          AND START_TIME < DATEADD('hour', -24, CURRENT_TIMESTAMP())
+          AND CREDITS_USED > 0
+        ORDER BY START_TIME DESC, NAME
+        """
+    
+    def render_openflow_metrics(self, data: pd.DataFrame) -> None:
+        """Render Openflow metrics."""
+        if data.empty:
+            return
+        
+        data = data.copy()
+        data['START_TIME'] = pd.to_datetime(data['START_TIME'])
+        
+        total_credits = data['TOTAL_CREDITS'].sum()
+        unique_pools = data['COMPUTE_POOL_NAME'].nunique()
+        
+        current_month = data['START_TIME'].max().to_period('M')
+        current_month_data = data[data['START_TIME'].dt.to_period('M') == current_month]
+        current_month_credits = current_month_data['TOTAL_CREDITS'].sum()
+        
+        prev_month = current_month - 1
+        prev_month_data = data[data['START_TIME'].dt.to_period('M') == prev_month]
+        prev_month_credits = prev_month_data['TOTAL_CREDITS'].sum()
+        
+        if prev_month_credits > 0:
+            mom_change = ((current_month_credits - prev_month_credits) / prev_month_credits) * 100
+        else:
+            mom_change = 0
+        
+        st.markdown("#### Openflow Overview")
+        st.caption("Last 12 months of Openflow compute pool usage")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                label="Total Openflow Credits (12 mo)",
+                value=format_credits_with_dollars(total_credits),
+                help="Total credits consumed by Openflow compute pools over the last 12 months"
+            )
+        
+        with col2:
+            current_month_str = current_month.strftime('%B %Y')
+            prev_month_str = prev_month.strftime('%B %Y')
+            st.metric(
+                label=f"{current_month_str} (MTD)",
+                value=format_credits_with_dollars(current_month_credits),
+                delta=f"{mom_change:+.1f}% vs {prev_month_str}" if mom_change != 0 else None,
+                delta_color="inverse",
+                help=f"Month-to-date credits for {current_month_str}"
+            )
+        
+        with col3:
+            st.metric(
+                label="Compute Pools",
+                value=f"{unique_pools}",
+                help="Number of Openflow compute pools with consumption"
+            )
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            avg_daily_credits = data.groupby(data['START_TIME'].dt.date)['TOTAL_CREDITS'].sum().mean()
+            st.metric(
+                label="Daily Average",
+                value=format_credits_with_dollars(avg_daily_credits),
+                help="Average daily Openflow credit consumption"
+            )
+        
+        with col2:
+            daily_consumption = data.groupby(data['START_TIME'].dt.date)['TOTAL_CREDITS'].sum()
+            peak_daily = daily_consumption.max()
+            st.metric(
+                label="Peak Daily Usage",
+                value=format_credits_with_dollars(peak_daily),
+                help="Highest single-day Openflow credit consumption"
+            )
+    
+    def render_openflow_charts(self, data: pd.DataFrame) -> None:
+        """Render Openflow charts and analysis."""
+        if data.empty:
+            return
+        
+        data = data.copy()
+        data['START_TIME'] = pd.to_datetime(data['START_TIME'])
+        
+        tab1, tab2, tab3 = st.tabs(["Trends", "By Compute Pool", "Daily Patterns"])
+        
+        with tab1:
+            self.render_openflow_trends_chart(data)
+        
+        with tab2:
+            self.render_compute_pool_breakdown(data)
+        
+        with tab3:
+            self.render_openflow_daily_patterns(data)
+    
+    def render_openflow_trends_chart(self, data: pd.DataFrame) -> None:
+        """Render Openflow consumption trends over time."""
+        st.markdown("#### Openflow Consumption Over Time")
+        
+        daily_data = data.groupby(data['START_TIME'].dt.date).agg({
+            'TOTAL_CREDITS': 'sum'
+        }).reset_index()
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(
+            x=daily_data['START_TIME'],
+            y=daily_data['TOTAL_CREDITS'],
+            mode='lines',
+            name='Openflow Credits',
+            line=dict(color='#17becf', width=3),
+            hovertemplate='<b>Openflow Credits</b><br>Date: %{x}<br>Credits: %{y:,.2f}<extra></extra>'
+        ))
+        
+        fig.update_layout(
+            title='Daily Openflow Credit Consumption',
+            xaxis_title='Date',
+            yaxis_title='Credits Used',
+            height=500,
+            hovermode='x unified'
+        )
+        
+        update_chart_with_time_range(
+            fig, 
+            daily_data, 
+            'START_TIME', 
+            'Date', 
+            'Daily Openflow Credit Consumption'
+        )
+        
+        render_plotly_chart(fig)
+    
+    def render_compute_pool_breakdown(self, data: pd.DataFrame) -> None:
+        """Render breakdown by compute pool."""
+        if 'START_TIME' in data.columns and len(data) > 0:
+            min_date = data['START_TIME'].min()
+            max_date = data['START_TIME'].max()
+            date_range_str = f"{min_date.strftime('%b %d, %Y')} - {max_date.strftime('%b %d, %Y')}"
+            st.markdown(f"#### Credit Consumption by Compute Pool")
+            st.caption(f"Data period: {date_range_str}")
+        else:
+            st.markdown("#### Credit Consumption by Compute Pool")
+        
+        pool_data = data.groupby('COMPUTE_POOL_NAME').agg({
+            'TOTAL_CREDITS': 'sum'
+        }).reset_index().sort_values('TOTAL_CREDITS', ascending=False)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            top_pools = pool_data.head(10)
+            fig_bar = px.bar(
+                top_pools,
+                x='TOTAL_CREDITS',
+                y='COMPUTE_POOL_NAME',
+                orientation='h',
+                title='Top Compute Pools by Credit Consumption',
+                labels={'TOTAL_CREDITS': 'Credits Used', 'COMPUTE_POOL_NAME': 'Compute Pool'}
+            )
+            fig_bar.update_layout(height=400)
+            render_plotly_chart(fig_bar)
+        
+        with col2:
+            fig_pie = px.pie(
+                pool_data.head(8),
+                values='TOTAL_CREDITS',
+                names='COMPUTE_POOL_NAME',
+                title='Credit Distribution by Compute Pool'
+            )
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+            render_plotly_chart(fig_pie)
+        
+        st.markdown("#### Weekly Cost by Compute Pool")
+        
+        credit_price = st.session_state.get('credit_price', 2.0)
+        
+        weekly_pool_data = data.copy()
+        weekly_pool_data['WEEK'] = weekly_pool_data['START_TIME'].dt.to_period('W').apply(lambda x: x.start_time)
+        weekly_pool_data['WEEK_LABEL'] = weekly_pool_data['WEEK'].dt.strftime('%b %d')
+        
+        weekly_agg = weekly_pool_data.groupby(['WEEK', 'WEEK_LABEL', 'COMPUTE_POOL_NAME']).agg({
+            'TOTAL_CREDITS': 'sum'
+        }).reset_index()
+        
+        weekly_agg['COST'] = weekly_agg['TOTAL_CREDITS'] * credit_price
+        
+        pool_totals = weekly_agg.groupby('COMPUTE_POOL_NAME')['COST'].sum().sort_values(ascending=False)
+        all_pools = pool_totals.index.tolist()
+        
+        default_pools = all_pools[:5] if len(all_pools) > 5 else all_pools
+        selected_pools = st.multiselect(
+            "Select Compute Pools",
+            options=all_pools,
+            default=default_pools,
+            key="weekly_openflow_pool_selector"
+        )
+        
+        if not selected_pools:
+            st.info("Select at least one compute pool to display the chart.")
+            return
+        
+        chart_data = weekly_agg[weekly_agg['COMPUTE_POOL_NAME'].isin(selected_pools)].copy()
+        chart_data = chart_data.sort_values('WEEK')
+        
+        fig = go.Figure()
+        
+        colors = px.colors.qualitative.Set2
+        for i, pool in enumerate(selected_pools):
+            pool_weekly = chart_data[chart_data['COMPUTE_POOL_NAME'] == pool]
+            fig.add_trace(go.Bar(
+                x=pool_weekly['WEEK_LABEL'],
+                y=pool_weekly['COST'],
+                name=pool,
+                marker_color=colors[i % len(colors)],
+                hovertemplate='<b>%{x}</b><br>' + pool + '<br>Cost: $%{y:,.2f}<extra></extra>'
+            ))
+        
+        fig.update_layout(
+            barmode='stack',
+            title='Weekly Openflow Cost by Compute Pool',
+            xaxis_title='Week Starting',
+            yaxis_title='Cost ($)',
+            height=450,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5
+            ),
+            yaxis=dict(tickprefix='$', tickformat=',.0f')
+        )
+        
+        render_plotly_chart(fig)
+    
+    def render_openflow_daily_patterns(self, data: pd.DataFrame) -> None:
+        """Render Openflow daily and hourly patterns."""
+        st.markdown("#### Openflow Usage Patterns")
+        
+        credit_price = st.session_state.get('credit_price', 2.0)
+        
+        data = data.copy()
+        data['HOUR'] = data['START_TIME'].dt.hour
+        data['DAY_OF_WEEK'] = data['START_TIME'].dt.day_name()
+        data['COST'] = data['TOTAL_CREDITS'] * credit_price
+        
+        hourly_stats = data.groupby('HOUR').agg({
+            'TOTAL_CREDITS': ['sum', 'mean', 'count']
+        }).reset_index()
+        hourly_stats.columns = ['HOUR', 'sum', 'mean', 'count']
+        
+        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        daily_stats = data.groupby('DAY_OF_WEEK').agg({
+            'TOTAL_CREDITS': ['sum', 'mean', 'count']
+        }).reset_index()
+        daily_stats.columns = ['DAY_OF_WEEK', 'sum', 'mean', 'count']
+        daily_stats['DAY_OF_WEEK'] = pd.Categorical(daily_stats['DAY_OF_WEEK'], categories=day_order, ordered=True)
+        daily_stats = daily_stats.sort_values('DAY_OF_WEEK')
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            hourly_stats['COST'] = hourly_stats['sum'] * credit_price
+            max_hourly = hourly_stats['COST'].max()
+            hourly_stats['intensity'] = hourly_stats['COST'] / max_hourly if max_hourly > 0 else 0
+            colors_hourly = [f'rgba(23, 190, 207, {0.3 + 0.7 * i})' for i in hourly_stats['intensity']]
+            
+            fig_hourly = go.Figure(data=go.Bar(
+                x=hourly_stats['HOUR'],
+                y=hourly_stats['COST'],
+                marker_color=colors_hourly,
+                hovertemplate='Hour %{x}:00<br>Total Cost: $%{y:,.2f}<extra></extra>'
+            ))
+            fig_hourly.update_layout(
+                title='Total Cost by Hour of Day',
+                xaxis_title='Hour of Day',
+                yaxis_title='Total Cost ($)',
+                height=350,
+                xaxis=dict(tickmode='linear', dtick=2),
+                yaxis=dict(tickprefix='$', tickformat=',.0f')
+            )
+            render_plotly_chart(fig_hourly)
+        
+        with col2:
+            daily_stats['COST'] = daily_stats['sum'] * credit_price
+            max_daily = daily_stats['COST'].max()
+            daily_stats['intensity'] = daily_stats['COST'] / max_daily if max_daily > 0 else 0
+            colors_daily = [f'rgba(23, 190, 207, {0.3 + 0.7 * i})' for i in daily_stats['intensity']]
+            
+            fig_daily = go.Figure(data=go.Bar(
+                x=daily_stats['DAY_OF_WEEK'],
+                y=daily_stats['COST'],
+                marker_color=colors_daily,
+                hovertemplate='%{x}<br>Total Cost: $%{y:,.2f}<extra></extra>'
+            ))
+            fig_daily.update_layout(
+                title='Total Cost by Day of Week',
+                xaxis_title='',
+                yaxis_title='Total Cost ($)',
+                height=350,
+                xaxis=dict(tickangle=-45),
+                yaxis=dict(tickprefix='$', tickformat=',.0f')
+            )
+            render_plotly_chart(fig_daily)
+    
+    def render_analysis_tabs(self, data: pd.DataFrame, view_type: ViewType) -> None:
+        """Not used - all rendering done in render_analysis()."""
+        pass
+
+
 class CloudServicesAnalyzer(ServiceAnalyzer):
     """
     Cloud Services analyzer for monitoring overhead costs and cloud service usage.
@@ -6154,6 +6963,8 @@ class SnowflakeUsageDashboard:
             "Overview",
             "Storage", 
             "Warehouse Compute",
+            "SPCS Compute",
+            "Openflow",
             "Cloud Services",
             "Replication", 
             "Clustering",
@@ -6558,6 +7369,10 @@ class SnowflakeUsageDashboard:
             self.render_storage_tab()
         elif current_tab == "Warehouse Compute":
             self.render_consumption_tab()
+        elif current_tab == "SPCS Compute":
+            self.render_spcs_tab()
+        elif current_tab == "Openflow":
+            self.render_openflow_tab()
         elif current_tab == "Cloud Services":
             self.render_cloud_services_tab()
         elif current_tab == "Replication":
@@ -7283,6 +8098,16 @@ class SnowflakeUsageDashboard:
         """Render the Consumption analysis tab using ConsumptionAnalyzer."""
         consumption_analyzer = ConsumptionAnalyzer(self.data_manager)
         consumption_analyzer.render_analysis()
+    
+    def render_spcs_tab(self):
+        """Render the SPCS Compute analysis tab using SPCSAnalyzer."""
+        spcs_analyzer = SPCSAnalyzer(self.data_manager)
+        spcs_analyzer.render_analysis()
+    
+    def render_openflow_tab(self):
+        """Render the Openflow analysis tab using OpenflowAnalyzer."""
+        openflow_analyzer = OpenflowAnalyzer(self.data_manager)
+        openflow_analyzer.render_analysis()
     
     def render_cloud_services_tab(self):
         """Render the Cloud Services analysis tab."""

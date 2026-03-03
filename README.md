@@ -5,7 +5,7 @@ A comprehensive Streamlit application for monitoring and analyzing Snowflake acc
 <img width="3288" height="1900" alt="image" src="https://github.com/user-attachments/assets/ef80d42d-888f-4b43-b7e5-a7ae8c955f24" />
 
 ## Updates
-3/3/26 - Added Snowflake Intelligence and Cortex Agents usage tracking, Cost per Credit ($) input for accurate cost calculations
+3/3/26 - Added Snowflake Intelligence and Cortex Agents usage tracking, SPCS and Openflow usage tracking, Cost per Credit ($) input for accurate cost calculations
 
 10/22 - Added `snowflake_cost_dashboard_V2.py` that includes a cache layer for the AI Services tab and speeds up subsequent page loads
 
