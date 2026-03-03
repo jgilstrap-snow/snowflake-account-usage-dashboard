@@ -147,15 +147,21 @@ def update_chart_with_time_range(fig, data: pd.DataFrame, date_column: str,
             fig.update_layout(title=title_with_range)
 
 # Import for Snowflake Streamlit environment
+SNOWFLAKE_AVAILABLE = False
+get_active_session = None
+
 try:
     from snowflake.snowpark.context import get_active_session
     from snowflake.snowpark import Session
     SNOWFLAKE_AVAILABLE = True
 except ImportError:
-    # Fallback for development/testing environment
-    SNOWFLAKE_AVAILABLE = False
+    pass
+
+try:
     import snowflake.connector
     from snowflake.connector import DictCursor
+except ImportError:
+    pass
 
 
 class ViewType(Enum):
