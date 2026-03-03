@@ -50,6 +50,44 @@ def render_plotly_chart(fig, use_container_width=True, **kwargs):
     return st.plotly_chart(fig, use_container_width=use_container_width, config=config)
 
 
+def format_credits_with_dollars(credits: float, credit_price: float = None) -> str:
+    """
+    Format credits with dollar amount for display.
+    
+    Args:
+        credits: Credit value to format
+        credit_price: Price per credit (uses session state if not provided)
+        
+    Returns:
+        Formatted string like "1,234 ($2,468)"
+    """
+    if pd.isna(credits) or credits is None:
+        return "0 ($0.00)"
+    
+    if credit_price is None:
+        credit_price = st.session_state.get('credit_price', 2.00)
+    
+    dollar_amount = credits * credit_price
+    
+    if credits < 0.01:
+        credit_str = f"{credits:.4f}"
+    elif credits < 1:
+        credit_str = f"{credits:.3f}"
+    elif credits < 100:
+        credit_str = f"{credits:.2f}"
+    else:
+        credit_str = f"{credits:,.0f}"
+    
+    if dollar_amount < 1:
+        dollar_str = f"${dollar_amount:.2f}"
+    elif dollar_amount < 1000:
+        dollar_str = f"${dollar_amount:,.2f}"
+    else:
+        dollar_str = f"${dollar_amount:,.0f}"
+    
+    return f"{credit_str} ({dollar_str})"
+
+
 def get_time_range_string(data: pd.DataFrame, date_column: str) -> str:
     """
     Generate a time range string for chart axis labels based on data date range.
@@ -65,23 +103,20 @@ def get_time_range_string(data: pd.DataFrame, date_column: str) -> str:
         return ""
     
     try:
-        # Ensure the column is datetime
         date_series = pd.to_datetime(data[date_column])
         
-        # Get min and max dates
         min_date = date_series.min()
         max_date = date_series.max()
         
-        # Format based on date range span
+        if pd.isna(min_date) or pd.isna(max_date):
+            return ""
+        
         if min_date.year == max_date.year:
             if min_date.month == max_date.month:
-                # Same month and year
                 return min_date.strftime("%b %Y")
             else:
-                # Same year, different months
                 return f"{min_date.strftime('%b')} - {max_date.strftime('%b %Y')}"
         else:
-            # Different years
             return f"{min_date.strftime('%b %Y')} - {max_date.strftime('%b %Y')}"
     except Exception:
         return ""
@@ -361,9 +396,9 @@ class DataProcessor:
         """
         view_name = view_type.value.replace('_', ' ').title()
         
-        st.warning(f"📊 No {service_name.lower()} {query_type} found for {view_name} view")
+        st.warning(f"No {service_name.lower()} {query_type} found for {view_name} view")
         
-        with st.expander("💡 **Possible Reasons & Solutions**"):
+        with st.expander("**Possible Reasons & Solutions**"):
             st.markdown(f"""
             **Why might {service_name} data be empty?**
             
@@ -392,29 +427,43 @@ class DataProcessor:
                 st.code(f"• SNOWFLAKE.ACCOUNT_USAGE.{service_name.upper()}_HISTORY")
     
     @staticmethod
-    def format_credits_display(credits: float) -> str:
+    def format_credits_display(credits: float, include_dollars: bool = True) -> str:
         """
-        Format credit values for consistent display.
+        Format credit values for consistent display with optional dollar amount.
         
         Args:
             credits (float): Credit value to format
+            include_dollars (bool): Whether to include dollar conversion
             
         Returns:
-            str: Formatted credit string
+            str: Formatted credit string with optional dollar amount
         """
         if pd.isna(credits):
             return "N/A"
         
         if credits == 0:
-            return "0"
+            credit_str = "0"
         elif credits < 0.01:
-            return f"{credits:.4f}"
+            credit_str = f"{credits:.4f}"
         elif credits < 1:
-            return f"{credits:.3f}"
+            credit_str = f"{credits:.3f}"
         elif credits < 100:
-            return f"{credits:.2f}"
+            credit_str = f"{credits:.2f}"
         else:
-            return f"{credits:,.0f}"
+            credit_str = f"{credits:,.0f}"
+        
+        if include_dollars:
+            credit_price = st.session_state.get('credit_price', 2.00)
+            dollar_amount = credits * credit_price
+            if dollar_amount < 1:
+                dollar_str = f"${dollar_amount:.2f}"
+            elif dollar_amount < 1000:
+                dollar_str = f"${dollar_amount:,.2f}"
+            else:
+                dollar_str = f"${dollar_amount:,.0f}"
+            return f"{credit_str} ({dollar_str})"
+        
+        return credit_str
     
     @staticmethod
     def get_date_range_filter(data: pd.DataFrame, date_column: str = 'USAGE_MONTH') -> Tuple[pd.Timestamp, pd.Timestamp]:
@@ -520,13 +569,13 @@ class ServiceAnalyzer(ABC):
         is_valid, issues = DataProcessor.validate_data_consistency(service_data, required_columns)
         
         if not is_valid:
-            with st.expander("⚠️ **Data Quality Issues Detected**"):
+            with st.expander("**Data Quality Issues Detected**"):
                 for issue in issues:
                     st.warning(f"• {issue}")
             
             # Continue with available data but show warning
             if not service_data.empty:
-                st.info("📊 Proceeding with available data despite quality issues")
+                st.info("Proceeding with available data despite quality issues")
             else:
                 return
         
@@ -544,7 +593,7 @@ class ServiceAnalyzer(ABC):
         Returns:
             ViewType: Selected view type
         """
-        st.markdown("#### 🎛️ Analysis View")
+        st.markdown("#### 🎛Analysis View")
         
         # Create columns for the toggle
         col1, col2 = st.columns([2, 1])
@@ -606,14 +655,14 @@ class ServiceAnalyzer(ABC):
         
         with col1:
             st.metric(
-                label=f"💰 Total {self.service_name} Credits",
+                label=f"Total {self.service_name} Credits",
                 value=DataProcessor.format_credits_display(total_credits),
                 help=f"Total credits used across all time periods"
             )
         
         with col2:
             st.metric(
-                label=f"📊 Current Month",
+                label=f"Current Month",
                 value=DataProcessor.format_credits_display(current_total),
                 delta=f"{mom_change:+.1f}%" if mom_change != 0 else None,
                 help=f"Credits used in {current_month.strftime('%Y-%m')}"
@@ -621,7 +670,7 @@ class ServiceAnalyzer(ABC):
         
         with col3:
             st.metric(
-                label=f"📈 Monthly Average",
+                label=f"Monthly Average",
                 value=DataProcessor.format_credits_display(avg_monthly_credits),
                 help=f"Average monthly credits across all periods"
             )
@@ -629,7 +678,7 @@ class ServiceAnalyzer(ABC):
         with col4:
             view_name = self.view_types[view_type]['name']
             st.metric(
-                label=f"🏷️ Active {view_name}s",
+                label=f"Active {view_name}s",
                 value=f"{unique_entities}",
                 help=f"Number of unique {view_name.lower()}s with {self.service_name.lower()} usage"
             )
@@ -643,7 +692,7 @@ class ServiceAnalyzer(ABC):
             view_type (ViewType): Current view type
         """
         # Create tabs for different analysis views
-        tab1, tab2, tab3 = st.tabs(["📈 Trends", "📊 Breakdown", "📋 Detailed Data"])
+        tab1, tab2, tab3 = st.tabs(["Trends", "Breakdown", "Detailed Data"])
         
         with tab1:
             self.render_trends_chart(data, view_type)
@@ -699,7 +748,7 @@ class ServiceAnalyzer(ABC):
         )
         
         fig.update_traces(line=dict(width=3))
-        st.plotly_chart(fig, use_container_width=True)
+        render_plotly_chart(fig)
     
     def render_breakdown_charts(self, data: pd.DataFrame, view_type: ViewType) -> None:
         """
@@ -735,7 +784,7 @@ class ServiceAnalyzer(ABC):
                 title=f'{self.service_name} Distribution by {view_name} (Top 10)'
             )
             fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
+            render_plotly_chart(fig_pie)
         
         with col2:
             # Horizontal bar chart
@@ -748,7 +797,7 @@ class ServiceAnalyzer(ABC):
                 labels={'TOTAL_CREDITS': 'Credits Used', grouping_col: view_name}
             )
             fig_bar.update_layout(height=600)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            render_plotly_chart(fig_bar)
     
     def render_detailed_table(self, data: pd.DataFrame, view_type: ViewType) -> None:
         """
@@ -761,7 +810,7 @@ class ServiceAnalyzer(ABC):
         grouping_col = self.get_grouping_column(view_type)
         view_name = self.view_types[view_type]['name']
         
-        st.markdown(f"#### 📋 Detailed {self.service_name} Data by {view_name}")
+        st.markdown(f"#### Detailed {self.service_name} Data by {view_name}")
         
         # Filtering options
         col1, col2, col3 = st.columns(3)
@@ -779,14 +828,18 @@ class ServiceAnalyzer(ABC):
             # Month range filter
             min_month = data['USAGE_MONTH'].min().to_pydatetime()
             max_month = data['USAGE_MONTH'].max().to_pydatetime()
-            selected_months = st.slider(
-                "Select Month Range:",
-                value=(min_month, max_month),
-                min_value=min_month,
-                max_value=max_month,
-                format="YYYY-MM",
-                key=f"{self.service_name}_{view_type.value}_month_filter"
-            )
+            if min_month < max_month:
+                selected_months = st.slider(
+                    "Select Month Range:",
+                    value=(min_month, max_month),
+                    min_value=min_month,
+                    max_value=max_month,
+                    format="YYYY-MM",
+                    key=f"{self.service_name}_{view_type.value}_month_filter"
+                )
+            else:
+                st.info(f"Data: {min_month.strftime('%Y-%m')}")
+                selected_months = (min_month, max_month)
         
         with col3:
             # Credits threshold
@@ -989,9 +1042,6 @@ class StorageAnalyzer(ServiceAnalyzer):
         Main entry point for rendering account-level storage analysis.
         Simplified version without view toggles.
         """
-        st.markdown(f"### {self.service_name} Analysis")
-        st.markdown(f"Account-level storage usage analysis showing total storage consumption across all databases.")
-        
         # Check connection
         if not self.data_manager or not self.data_manager.session:
             st.error("❌ No active Snowflake session available")
@@ -1002,8 +1052,8 @@ class StorageAnalyzer(ServiceAnalyzer):
         
         # Handle empty result sets with appropriate messaging
         if storage_data is None or storage_data.empty:
-            st.warning("📊 No storage data found for your account")
-            with st.expander("💡 **Possible Reasons & Solutions**"):
+            st.warning("No storage data found for your account")
+            with st.expander("**Possible Reasons & Solutions**"):
                 st.markdown("""
                 **Why might storage data be empty?**
                 
@@ -1070,7 +1120,7 @@ class StorageAnalyzer(ServiceAnalyzer):
         Generate account-level storage usage query using DATABASE_STORAGE_USAGE_HISTORY.
         
         This view provides more accurate database-level storage that is aggregated to account level.
-        Includes database storage, failsafe storage, and stage storage.
+        Includes database storage, failsafe storage, stage storage, hybrid tables, and archive storage.
         
         Args:
             view_type (ViewType): Ignored - always account level
@@ -1080,8 +1130,6 @@ class StorageAnalyzer(ServiceAnalyzer):
         """
         return """
         WITH database_storage AS (
-            -- Aggregate all database storage by date (including deleted databases for historical accuracy)
-            -- No date filter to show all available history (Snowflake retains 1 year of data)
             SELECT 
                 USAGE_DATE,
                 SUM(AVERAGE_DATABASE_BYTES) as STORAGE_BYTES,
@@ -1090,32 +1138,42 @@ class StorageAnalyzer(ServiceAnalyzer):
             GROUP BY USAGE_DATE
         ),
         stage_storage AS (
-            -- Get stage storage separately
-            -- No date filter to show all available history (Snowflake retains 1 year of data)
             SELECT 
                 USAGE_DATE,
                 SUM(AVERAGE_STAGE_BYTES) as STAGE_BYTES
             FROM SNOWFLAKE.ACCOUNT_USAGE.STAGE_STORAGE_USAGE_HISTORY
             GROUP BY USAGE_DATE
+        ),
+        account_storage AS (
+            SELECT 
+                USAGE_DATE,
+                HYBRID_TABLE_STORAGE_BYTES,
+                ARCHIVE_STORAGE_COOL_BYTES,
+                ARCHIVE_STORAGE_COLD_BYTES
+            FROM SNOWFLAKE.ACCOUNT_USAGE.STORAGE_USAGE
         )
         SELECT 
-            COALESCE(d.USAGE_DATE, s.USAGE_DATE) as USAGE_DATE,
+            COALESCE(d.USAGE_DATE, s.USAGE_DATE, a.USAGE_DATE) as USAGE_DATE,
             COALESCE(d.STORAGE_BYTES, 0) as STORAGE_BYTES,
             COALESCE(s.STAGE_BYTES, 0) as STAGE_BYTES,
             COALESCE(d.FAILSAFE_BYTES, 0) as FAILSAFE_BYTES,
+            COALESCE(a.HYBRID_TABLE_STORAGE_BYTES, 0) as HYBRID_TABLE_BYTES,
+            COALESCE(a.ARCHIVE_STORAGE_COOL_BYTES, 0) as ARCHIVE_COOL_BYTES,
+            COALESCE(a.ARCHIVE_STORAGE_COLD_BYTES, 0) as ARCHIVE_COLD_BYTES,
             -- Convert bytes to GB for easier reading
             COALESCE(d.STORAGE_BYTES, 0) / (1024.0 * 1024.0 * 1024.0) as STORAGE_GB,
             COALESCE(s.STAGE_BYTES, 0) / (1024.0 * 1024.0 * 1024.0) as STAGE_GB,
             COALESCE(d.FAILSAFE_BYTES, 0) / (1024.0 * 1024.0 * 1024.0) as FAILSAFE_GB,
-            -- Convert bytes to approximate credits (rate may vary by region)
-            (COALESCE(d.STORAGE_BYTES, 0) / (1024.0 * 1024.0 * 1024.0)) * 0.00005479 as STORAGE_CREDITS,
-            (COALESCE(s.STAGE_BYTES, 0) / (1024.0 * 1024.0 * 1024.0)) * 0.00005479 as STAGE_CREDITS,
-            (COALESCE(d.FAILSAFE_BYTES, 0) / (1024.0 * 1024.0 * 1024.0)) * 0.00005479 as FAILSAFE_CREDITS,
+            COALESCE(a.HYBRID_TABLE_STORAGE_BYTES, 0) / (1024.0 * 1024.0 * 1024.0) as HYBRID_TABLE_GB,
+            COALESCE(a.ARCHIVE_STORAGE_COOL_BYTES, 0) / (1024.0 * 1024.0 * 1024.0) as ARCHIVE_COOL_GB,
+            COALESCE(a.ARCHIVE_STORAGE_COLD_BYTES, 0) / (1024.0 * 1024.0 * 1024.0) as ARCHIVE_COLD_GB,
             -- Total storage
-            (COALESCE(d.STORAGE_BYTES, 0) + COALESCE(s.STAGE_BYTES, 0) + COALESCE(d.FAILSAFE_BYTES, 0)) / (1024.0 * 1024.0 * 1024.0) as TOTAL_STORAGE_GB,
-            ((COALESCE(d.STORAGE_BYTES, 0) + COALESCE(s.STAGE_BYTES, 0) + COALESCE(d.FAILSAFE_BYTES, 0)) / (1024.0 * 1024.0 * 1024.0)) * 0.00005479 as TOTAL_CREDITS
+            (COALESCE(d.STORAGE_BYTES, 0) + COALESCE(s.STAGE_BYTES, 0) + COALESCE(d.FAILSAFE_BYTES, 0) + 
+             COALESCE(a.HYBRID_TABLE_STORAGE_BYTES, 0) + COALESCE(a.ARCHIVE_STORAGE_COOL_BYTES, 0) + 
+             COALESCE(a.ARCHIVE_STORAGE_COLD_BYTES, 0)) / (1024.0 * 1024.0 * 1024.0) as TOTAL_STORAGE_GB
         FROM database_storage d
         FULL OUTER JOIN stage_storage s ON d.USAGE_DATE = s.USAGE_DATE
+        FULL OUTER JOIN account_storage a ON COALESCE(d.USAGE_DATE, s.USAGE_DATE) = a.USAGE_DATE
         ORDER BY USAGE_DATE DESC
         """
     
@@ -1149,80 +1207,72 @@ class StorageAnalyzer(ServiceAnalyzer):
         else:
             storage_change = 0
         
-        st.markdown("#### 📊 Account Storage Overview")
+        st.markdown("#### Account Storage Overview")
         
         # Display metrics in columns
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.metric(
-                label="💾 Total Storage",
+                label="Total Storage",
                 value=f"{latest_data['TOTAL_STORAGE_GB']:,.1f} GB",
-                delta=f"{storage_change:+.1f}%" if storage_change != 0 else None,
-                help="Total storage across all databases, stages, and failsafe"
+                delta=f"{storage_change:+.1f}% vs last month" if storage_change != 0 else None,
+                help="Total storage across all databases, stages, and failsafe. Percentage shows month-over-month change."
             )
         
         with col2:
             st.metric(
-                label="🗄️ Database Storage",
+                label="Database Storage",
                 value=f"{latest_data['STORAGE_GB']:,.1f} GB",
                 help="Primary database storage usage"
             )
         
         with col3:
             st.metric(
-                label="📤 Stage Storage",
+                label="Stage Storage",
                 value=f"{latest_data['STAGE_GB']:,.1f} GB",
                 help="Temporary stage storage for data loading"
             )
         
         with col4:
             st.metric(
-                label="🛡️ Failsafe Storage",
+                label="Failsafe Storage",
                 value=f"{latest_data['FAILSAFE_GB']:,.1f} GB",
                 help="Failsafe storage for data recovery"
             )
         
-        # Additional metrics row
-        col1, col2, col3, col4 = st.columns(4)
+        # Calculate estimated monthly cost using official Snowflake pricing (AWS US East rates)
+        # Standard Storage: $23/TB/month, Hybrid Tables: $0.34/GB/month ($348/TB/month)
+        # Archive Cool: $4/TB/month, Archive Cold: $1/TB/month
+        standard_storage_tb = (latest_data['STORAGE_GB'] + latest_data['STAGE_GB'] + latest_data['FAILSAFE_GB']) / 1024
+        hybrid_storage_gb = latest_data.get('HYBRID_TABLE_GB', 0) if 'HYBRID_TABLE_GB' in latest_data else 0
+        archive_cool_tb = latest_data.get('ARCHIVE_COOL_GB', 0) / 1024 if 'ARCHIVE_COOL_GB' in latest_data else 0
+        archive_cold_tb = latest_data.get('ARCHIVE_COLD_GB', 0) / 1024 if 'ARCHIVE_COLD_GB' in latest_data else 0
         
-        with col1:
+        estimated_monthly_cost = (
+            standard_storage_tb * 23 +  # $23/TB/month for standard
+            hybrid_storage_gb * 0.34 +   # $0.34/GB/month for hybrid tables
+            archive_cool_tb * 4 +         # $4/TB/month for archive cool
+            archive_cold_tb * 1           # $1/TB/month for archive cold
+        )
+        
+        # Get credit price for equivalent calculation
+        credit_price = st.session_state.get('credit_price', 2.00)
+        credit_equivalent = estimated_monthly_cost / credit_price if credit_price > 0 else 0
+        
+        # Additional metrics row - Estimated Monthly Cost and Credit Equivalent
+        cost_col1, cost_col2 = st.columns(2)
+        with cost_col1:
             st.metric(
-                label="💰 Estimated Credits",
-                value=f"{latest_data['TOTAL_CREDITS']:,.2f}",
-                help="Approximate monthly storage credits (at current rates)"
+                label="Est. Monthly Cost",
+                value=f"${estimated_monthly_cost:,.2f}",
+                help="Estimated monthly storage cost based on Snowflake pricing: Standard \\$23/TB, Hybrid \\$0.34/GB, Archive Cool \\$4/TB, Archive Cold \\$1/TB"
             )
-        
-        with col2:
-            avg_growth = data['TOTAL_STORAGE_GB'].pct_change().mean() * 100
+        with cost_col2:
             st.metric(
-                label="📈 Avg Growth Rate",
-                value=f"{avg_growth:+.1f}%/month" if not pd.isna(avg_growth) else "N/A",
-                help="Average month-over-month storage growth rate"
-            )
-        
-        with col3:
-            # Storage efficiency - what percentage is active vs failsafe/stage
-            storage_efficiency = (latest_data['STORAGE_GB'] / latest_data['TOTAL_STORAGE_GB']) * 100 if latest_data['TOTAL_STORAGE_GB'] > 0 else 0
-            st.metric(
-                label="⚡ Storage Efficiency",
-                value=f"{storage_efficiency:.1f}%",
-                help="Percentage of storage that is active database storage"
-            )
-        
-        with col4:
-            # Calculate days of data using safe date operations
-            try:
-                start_date = data['USAGE_DATE'].min()
-                end_date = data['USAGE_DATE'].max()
-                days_of_data = (end_date - start_date).days
-            except Exception:
-                days_of_data = len(data)  # Fallback to row count
-            
-            st.metric(
-                label="📅 Data History",
-                value=f"{days_of_data} days",
-                help="Number of days of storage history available"
+                label="Credit Equivalent",
+                value=f"{credit_equivalent:,.2f}",
+                help=f"Storage cost expressed as credit equivalent at \\${credit_price:.2f}/credit"
             )
     
     def render_storage_trends_chart(self, data: pd.DataFrame) -> None:
@@ -1235,118 +1285,147 @@ class StorageAnalyzer(ServiceAnalyzer):
         if data.empty:
             return
         
-        st.markdown("#### 📈 Storage Trends Over Time")
+        st.markdown("#### Storage Trends Over Time")
         
         # Ensure consistent date handling
         data = data.copy()
         data['USAGE_DATE'] = pd.to_datetime(data['USAGE_DATE'])
         
-        # Sort data by date
-        data_sorted = data.sort_values('USAGE_DATE')
+        # Ensure new columns exist with defaults
+        for col in ['HYBRID_TABLE_GB', 'ARCHIVE_COOL_GB', 'ARCHIVE_COLD_GB']:
+            if col not in data.columns:
+                data[col] = 0
         
-        # Create the trends chart
-        fig = go.Figure()
+        # Aggregate by month for cleaner visualization
+        data['MONTH'] = data['USAGE_DATE'].dt.to_period('M')
+        monthly_data = data.groupby('MONTH').agg({
+            'STORAGE_GB': 'mean',
+            'STAGE_GB': 'mean',
+            'FAILSAFE_GB': 'mean',
+            'HYBRID_TABLE_GB': 'mean',
+            'ARCHIVE_COOL_GB': 'mean',
+            'ARCHIVE_COLD_GB': 'mean',
+            'TOTAL_STORAGE_GB': 'mean'
+        }).reset_index()
+        monthly_data['MONTH'] = monthly_data['MONTH'].dt.to_timestamp()
+        monthly_data = monthly_data.sort_values('MONTH')
         
-        # Add total storage line
-        fig.add_trace(go.Scatter(
-            x=data_sorted['USAGE_DATE'],
-            y=data_sorted['TOTAL_STORAGE_GB'],
-            mode='lines',
-            name='Total Storage',
-            line=dict(color='#1f77b4', width=3),
-            hovertemplate='<b>Total Storage</b><br>Date: %{x}<br>Storage: %{y:,.1f} GB<extra></extra>'
-        ))
-        
-        # Add database storage line
-        fig.add_trace(go.Scatter(
-            x=data_sorted['USAGE_DATE'],
-            y=data_sorted['STORAGE_GB'],
-            mode='lines',
-            name='Database Storage',
-            line=dict(color='#ff7f0e', width=2),
-            hovertemplate='<b>Database Storage</b><br>Date: %{x}<br>Storage: %{y:,.1f} GB<extra></extra>'
-        ))
-        
-        # Add stage storage line
-        fig.add_trace(go.Scatter(
-            x=data_sorted['USAGE_DATE'],
-            y=data_sorted['STAGE_GB'],
-            mode='lines',
-            name='Stage Storage',
-            line=dict(color='#2ca02c', width=2),
-            hovertemplate='<b>Stage Storage</b><br>Date: %{x}<br>Storage: %{y:,.1f} GB<extra></extra>'
-        ))
-        
-        # Add failsafe storage line
-        fig.add_trace(go.Scatter(
-            x=data_sorted['USAGE_DATE'],
-            y=data_sorted['FAILSAFE_GB'],
-            mode='lines',
-            name='Failsafe Storage',
-            line=dict(color='#d62728', width=2),
-            hovertemplate='<b>Failsafe Storage</b><br>Date: %{x}<br>Storage: %{y:,.1f} GB<extra></extra>'
-        ))
-        
-        # Update layout
-        fig.update_layout(
-            title='Account Storage Usage Over Time',
-            xaxis_title='Date',
-            yaxis_title='Storage (GB)',
-            height=500,
-            hovermode='x unified',
-            legend=dict(
-                orientation="v",
-                yanchor="top",
-                y=1,
-                xanchor="left",
-                x=1.02
-            )
+        # Calculate estimated monthly cost for each month
+        # Standard Storage: $23/TB/month, Hybrid Tables: $0.34/GB/month
+        # Archive Cool: $4/TB/month, Archive Cold: $1/TB/month
+        monthly_data['EST_MONTHLY_COST'] = (
+            (monthly_data['STORAGE_GB'] + monthly_data['STAGE_GB'] + monthly_data['FAILSAFE_GB']) / 1024 * 23 +
+            monthly_data['HYBRID_TABLE_GB'] * 0.34 +
+            monthly_data['ARCHIVE_COOL_GB'] / 1024 * 4 +
+            monthly_data['ARCHIVE_COLD_GB'] / 1024 * 1
         )
         
-        # Add time range information to chart
-        update_chart_with_time_range(
-            fig, 
-            data_sorted, 
-            'USAGE_DATE', 
-            'Date', 
-            'Storage Usage Trends Over Time'
+        # Create stacked bar chart
+        fig = go.Figure()
+        
+        # Add invisible trace for Est. Monthly Cost at top of hover
+        fig.add_trace(go.Scatter(
+            x=monthly_data['MONTH'],
+            y=[0] * len(monthly_data),
+            mode='markers',
+            marker=dict(size=0, opacity=0),
+            name='Est. Monthly Cost',
+            customdata=monthly_data['EST_MONTHLY_COST'],
+            hovertemplate='<b>$%{customdata:,.2f}</b><extra></extra>',
+            showlegend=False
+        ))
+        
+        # Add database storage bars
+        fig.add_trace(go.Bar(
+            x=monthly_data['MONTH'],
+            y=monthly_data['STORAGE_GB'],
+            name='Database Storage',
+            marker_color='#1f77b4',
+            hovertemplate='<b>Database Storage</b>: %{y:,.1f} GB<extra></extra>'
+        ))
+        
+        # Add stage storage bars
+        fig.add_trace(go.Bar(
+            x=monthly_data['MONTH'],
+            y=monthly_data['STAGE_GB'],
+            name='Stage Storage',
+            marker_color='#2ca02c',
+            hovertemplate='<b>Stage Storage</b>: %{y:,.1f} GB<extra></extra>'
+        ))
+        
+        # Add failsafe storage bars
+        fig.add_trace(go.Bar(
+            x=monthly_data['MONTH'],
+            y=monthly_data['FAILSAFE_GB'],
+            name='Failsafe Storage',
+            marker_color='#ff7f0e',
+            hovertemplate='<b>Failsafe Storage</b>: %{y:,.1f} GB<extra></extra>'
+        ))
+        
+        # Add hybrid table storage bars (only if there's data)
+        if monthly_data['HYBRID_TABLE_GB'].sum() > 0:
+            fig.add_trace(go.Bar(
+                x=monthly_data['MONTH'],
+                y=monthly_data['HYBRID_TABLE_GB'],
+                name='Hybrid Tables',
+                marker_color='#9467bd',
+                hovertemplate='<b>Hybrid Tables</b>: %{y:,.1f} GB<extra></extra>'
+            ))
+        
+        # Add archive cool storage bars (only if there's data)
+        if monthly_data['ARCHIVE_COOL_GB'].sum() > 0:
+            fig.add_trace(go.Bar(
+                x=monthly_data['MONTH'],
+                y=monthly_data['ARCHIVE_COOL_GB'],
+                name='Archive (Cool)',
+                marker_color='#17becf',
+                hovertemplate='<b>Archive (Cool)</b>: %{y:,.1f} GB<extra></extra>'
+            ))
+        
+        # Add archive cold storage bars (only if there's data)
+        if monthly_data['ARCHIVE_COLD_GB'].sum() > 0:
+            fig.add_trace(go.Bar(
+                x=monthly_data['MONTH'],
+                y=monthly_data['ARCHIVE_COLD_GB'],
+                name='Archive (Cold)',
+                marker_color='#7f7f7f',
+                hovertemplate='<b>Archive (Cold)</b>: %{y:,.1f} GB<extra></extra>'
+            ))
+        
+        # Update layout for stacked bar chart
+        fig.update_layout(
+            barmode='stack',
+            title='Monthly Average Storage Usage',
+            xaxis_title='Month',
+            yaxis_title='Storage (GB)',
+            height=400,
+            hovermode='x unified',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5
+            ),
+            xaxis=dict(
+                tickformat='%b %Y'
+            )
         )
         
         render_plotly_chart(fig)
         
+        # Sort data by date for insights
+        data_sorted = data.sort_values('USAGE_DATE')
+        
         # Add storage insights
-        with st.expander("💡 **Storage Insights**"):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**📊 Current Breakdown:**")
-                latest_data = data_sorted.iloc[-1]
-                total = latest_data['TOTAL_STORAGE_GB']
-                if total > 0:
-                    st.write(f"• **Database**: {(latest_data['STORAGE_GB']/total)*100:.1f}% ({latest_data['STORAGE_GB']:,.1f} GB)")
-                    st.write(f"• **Stage**: {(latest_data['STAGE_GB']/total)*100:.1f}% ({latest_data['STAGE_GB']:,.1f} GB)")
-                    st.write(f"• **Failsafe**: {(latest_data['FAILSAFE_GB']/total)*100:.1f}% ({latest_data['FAILSAFE_GB']:,.1f} GB)")
-            
-            with col2:
-                st.markdown("**📈 Growth Analysis:**")
-                if len(data_sorted) > 1:
-                    try:
-                        total_growth = ((data_sorted.iloc[-1]['TOTAL_STORAGE_GB'] - data_sorted.iloc[0]['TOTAL_STORAGE_GB']) / data_sorted.iloc[0]['TOTAL_STORAGE_GB']) * 100
-                        days_span = (data_sorted.iloc[-1]['USAGE_DATE'] - data_sorted.iloc[0]['USAGE_DATE']).days
-                        st.write(f"• **Total Growth**: {total_growth:+.1f}% over {days_span} days")
-                        
-                        # Growth rate recommendations
-                        monthly_growth = total_growth * (30 / days_span) if days_span > 0 else 0
-                        if monthly_growth > 20:
-                            st.write("• **📊 High Growth**: Consider storage optimization")
-                        elif monthly_growth > 10:
-                            st.write("• **📈 Moderate Growth**: Monitor storage trends")
-                        else:
-                            st.write("• **📉 Stable Growth**: Storage growth is manageable")
-                    except Exception:
-                        st.write("• **Growth analysis unavailable**")
-                else:
-                    st.write("• **Insufficient data for growth analysis**")
+        with st.expander("**Storage Insights**"):
+            st.markdown("**Current Breakdown:**")
+            latest_data = data_sorted.iloc[-1]
+            total = latest_data['TOTAL_STORAGE_GB']
+            if total > 0:
+                st.write(f"• **Database**: {(latest_data['STORAGE_GB']/total)*100:.1f}% ({latest_data['STORAGE_GB']:,.1f} GB)")
+                st.write(f"• **Stage**: {(latest_data['STAGE_GB']/total)*100:.1f}% ({latest_data['STAGE_GB']:,.1f} GB)")
+                st.write(f"• **Failsafe**: {(latest_data['FAILSAFE_GB']/total)*100:.1f}% ({latest_data['FAILSAFE_GB']:,.1f} GB)")
     
     def render_analysis_tabs(self, data: pd.DataFrame, view_type: ViewType) -> None:
         """
@@ -1376,9 +1455,6 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         Main entry point for rendering warehouse consumption analysis.
         Simplified version focusing only on warehouse analysis.
         """
-        st.markdown(f"### {self.service_name} Analysis")
-        st.markdown(f"Warehouse compute consumption analysis showing credit usage across all warehouses.")
-        
         # Check connection
         if not self.data_manager or not self.data_manager.session:
             st.error("❌ No active Snowflake session available")
@@ -1389,8 +1465,8 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         
         # Handle empty result sets with appropriate messaging
         if consumption_data is None or consumption_data.empty:
-            st.warning("📊 No warehouse consumption data found")
-            with st.expander("💡 **Possible Reasons & Solutions**"):
+            st.warning("No warehouse consumption data found")
+            with st.expander("**Possible Reasons & Solutions**"):
                 st.markdown("""
                 **Why might consumption data be empty?**
                 
@@ -1512,76 +1588,56 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         else:
             mom_change = 0
         
-        st.markdown("#### 📊 Warehouse Consumption Overview")
+        st.markdown("#### Warehouse Consumption Overview")
+        st.caption("Last 12 months of warehouse compute usage")
         
         # Display metrics in columns - based on official Snowflake patterns
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
             st.metric(
-                label="💻 Total Compute Credits",
-                value=f"{total_compute_credits:,.0f}",
-                help="Total compute credits consumed by all warehouses"
+                label="Total Compute Credits (12 mo)",
+                value=format_credits_with_dollars(total_compute_credits),
+                help="Total compute credits consumed by all warehouses over the last 12 months"
             )
         
         with col2:
+            current_month_str = current_month.strftime('%B %Y')
+            prev_month_str = prev_month.strftime('%B %Y')
             st.metric(
-                label="☁️ Total Cloud Services Credits",
-                value=f"{total_cloud_services_credits:,.0f}",
-                help="Total cloud services credits consumed"
+                label=f"{current_month_str} (MTD)",
+                value=format_credits_with_dollars(current_month_credits),
+                delta=f"{mom_change:+.1f}% vs {prev_month_str}" if mom_change != 0 else None,
+                delta_color="inverse",
+                help=f"Month-to-date credits for {current_month_str}. Comparison to {prev_month_str} may be incomplete if current month is in progress."
             )
         
         with col3:
             st.metric(
-                label="📊 Current Month Total",
-                value=f"{current_month_credits:,.0f}",
-                delta=f"{mom_change:+.1f}%" if mom_change != 0 else None,
-                help=f"Total credits for {current_month}"
-            )
-        
-        with col4:
-            st.metric(
-                label="🏭 Active Warehouses",
+                label="Active Warehouses",
                 value=f"{unique_warehouses}",
                 help="Number of warehouses with consumption"
             )
         
         # Additional metrics row
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2 = st.columns(2)
         
         with col1:
             avg_daily_credits = data.groupby(data['START_TIME'].dt.date)['TOTAL_CREDITS'].sum().mean()
             st.metric(
-                label="📈 Daily Average",
-                value=f"{avg_daily_credits:,.0f}",
+                label="Daily Average",
+                value=format_credits_with_dollars(avg_daily_credits),
                 help="Average daily credit consumption"
             )
         
         with col2:
-            cloud_services_pct = (total_cloud_services_credits / total_credits * 100) if total_credits > 0 else 0
-            st.metric(
-                label="☁️ Cloud Services %",
-                value=f"{cloud_services_pct:.1f}%",
-                help="Percentage of credits from cloud services"
-            )
-        
-        with col3:
             # Find peak day
             daily_consumption = data.groupby(data['START_TIME'].dt.date)['TOTAL_CREDITS'].sum()
             peak_daily = daily_consumption.max()
             st.metric(
-                label="📊 Peak Daily Usage",
-                value=f"{peak_daily:,.0f}",
+                label="Peak Daily Usage",
+                value=format_credits_with_dollars(peak_daily),
                 help="Highest single-day credit consumption"
-            )
-        
-        with col4:
-            # Data span
-            days_of_data = (data['START_TIME'].max() - data['START_TIME'].min()).days
-            st.metric(
-                label="📅 Data History",
-                value=f"{days_of_data} days",
-                help="Days of consumption history available"
             )
     
     def render_warehouse_consumption_charts(self, data: pd.DataFrame) -> None:
@@ -1599,7 +1655,7 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         data['START_TIME'] = pd.to_datetime(data['START_TIME'])
         
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 Trends", "🏭 By Warehouse", "📊 Daily Patterns", "💡 Insights"])
+        tab1, tab2, tab3 = st.tabs(["Trends", "By Warehouse", "Daily Patterns"])
         
         with tab1:
             self.render_consumption_trends_chart(data)
@@ -1609,19 +1665,14 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         
         with tab3:
             self.render_daily_patterns_chart(data)
-            
-        with tab4:
-            self.render_consumption_insights(data)
     
     def render_consumption_trends_chart(self, data: pd.DataFrame) -> None:
         """Render consumption trends over time."""
-        st.markdown("#### 📈 Consumption Trends Over Time")
+        st.markdown("#### Warehouse Consumption Over Time")
         
         # Daily aggregation
         daily_data = data.groupby(data['START_TIME'].dt.date).agg({
-            'CREDITS_USED_COMPUTE': 'sum',
-            'CREDITS_USED_CLOUD_SERVICES': 'sum',
-            'TOTAL_CREDITS': 'sum'
+            'CREDITS_USED_COMPUTE': 'sum'
         }).reset_index()
         
         # Create trends chart
@@ -1637,28 +1688,8 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
             hovertemplate='<b>Compute Credits</b><br>Date: %{x}<br>Credits: %{y:,.0f}<extra></extra>'
         ))
         
-        # Add cloud services credits line
-        fig.add_trace(go.Scatter(
-            x=daily_data['START_TIME'],
-            y=daily_data['CREDITS_USED_CLOUD_SERVICES'],
-            mode='lines',
-            name='Cloud Services Credits',
-            line=dict(color='#ff7f0e', width=2),
-            hovertemplate='<b>Cloud Services Credits</b><br>Date: %{x}<br>Credits: %{y:,.0f}<extra></extra>'
-        ))
-        
-        # Add total line
-        fig.add_trace(go.Scatter(
-            x=daily_data['START_TIME'],
-            y=daily_data['TOTAL_CREDITS'],
-            mode='lines',
-            name='Total Credits',
-            line=dict(color='#2ca02c', width=2, dash='dash'),
-            hovertemplate='<b>Total Credits</b><br>Date: %{x}<br>Credits: %{y:,.0f}<extra></extra>'
-        ))
-        
         fig.update_layout(
-            title='Daily Credit Consumption Trends',
+            title='Daily Warehouse Credit Consumption',
             xaxis_title='Date',
             yaxis_title='Credits Used',
             height=500,
@@ -1671,14 +1702,22 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
             daily_data, 
             'START_TIME', 
             'Date', 
-            'Daily Credit Consumption Trends'
+            'Daily Warehouse Credit Consumption'
         )
         
         render_plotly_chart(fig)
     
     def render_warehouse_breakdown_chart(self, data: pd.DataFrame) -> None:
         """Render breakdown by warehouse."""
-        st.markdown("#### 🏭 Credit Consumption by Warehouse")
+        # Calculate and display time range
+        if 'START_TIME' in data.columns and len(data) > 0:
+            min_date = data['START_TIME'].min()
+            max_date = data['START_TIME'].max()
+            date_range_str = f"{min_date.strftime('%b %d, %Y')} - {max_date.strftime('%b %d, %Y')}"
+            st.markdown(f"#### Credit Consumption by Warehouse")
+            st.caption(f"Data period: {date_range_str}")
+        else:
+            st.markdown("#### Credit Consumption by Warehouse")
         
         # Aggregate by warehouse
         warehouse_data = data.groupby('WAREHOUSE_NAME').agg({
@@ -1701,7 +1740,7 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
                 labels={'TOTAL_CREDITS': 'Credits Used', 'WAREHOUSE_NAME': 'Warehouse'}
             )
             fig_bar.update_layout(height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            render_plotly_chart(fig_bar)
         
         with col2:
             # Pie chart of warehouse distribution
@@ -1712,73 +1751,128 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
                 title='Credit Distribution by Warehouse (Top 8)'
             )
             fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
+            render_plotly_chart(fig_pie)
         
-        # Detailed warehouse table
-        st.markdown("#### 📋 Warehouse Consumption Details")
+        # Weekly cost breakdown by warehouse (stacked bar chart)
+        st.markdown("#### Weekly Cost by Warehouse")
         
-        # Format the data for display
-        display_data = warehouse_data.copy()
-        display_data['COMPUTE_CREDITS_FORMATTED'] = display_data['CREDITS_USED_COMPUTE'].apply(lambda x: f"{x:,.0f}")
-        display_data['CLOUD_SERVICES_FORMATTED'] = display_data['CREDITS_USED_CLOUD_SERVICES'].apply(lambda x: f"{x:,.0f}")
-        display_data['TOTAL_CREDITS_FORMATTED'] = display_data['TOTAL_CREDITS'].apply(lambda x: f"{x:,.0f}")
-        display_data['CLOUD_SERVICES_PCT'] = (display_data['CREDITS_USED_CLOUD_SERVICES'] / display_data['TOTAL_CREDITS'] * 100).round(1)
+        # Get credit price from session state
+        credit_price = st.session_state.get('credit_price', 2.0)
         
-        st.dataframe(
-            display_data[['WAREHOUSE_NAME', 'COMPUTE_CREDITS_FORMATTED', 'CLOUD_SERVICES_FORMATTED', 
-                         'TOTAL_CREDITS_FORMATTED', 'CLOUD_SERVICES_PCT']],
-            column_config={
-                'WAREHOUSE_NAME': 'Warehouse Name',
-                'COMPUTE_CREDITS_FORMATTED': 'Compute Credits',
-                'CLOUD_SERVICES_FORMATTED': 'Cloud Services Credits',
-                'TOTAL_CREDITS_FORMATTED': 'Total Credits',
-                'CLOUD_SERVICES_PCT': st.column_config.NumberColumn('Cloud Services %', format="%.1f%%")
-            },
-            use_container_width=True,
-            hide_index=True
+        # Group by week and warehouse
+        weekly_warehouse_data = data.copy()
+        weekly_warehouse_data['WEEK'] = weekly_warehouse_data['START_TIME'].dt.to_period('W').apply(lambda x: x.start_time)
+        weekly_warehouse_data['WEEK_LABEL'] = weekly_warehouse_data['WEEK'].dt.strftime('%b %d')
+        
+        weekly_agg = weekly_warehouse_data.groupby(['WEEK', 'WEEK_LABEL', 'WAREHOUSE_NAME']).agg({
+            'TOTAL_CREDITS': 'sum'
+        }).reset_index()
+        
+        # Calculate cost
+        weekly_agg['COST'] = weekly_agg['TOTAL_CREDITS'] * credit_price
+        
+        # Get warehouse list sorted by total cost
+        warehouse_totals = weekly_agg.groupby('WAREHOUSE_NAME')['COST'].sum().sort_values(ascending=False)
+        all_warehouses = warehouse_totals.index.tolist()
+        
+        # Warehouse selector - default to top 5 by cost
+        default_warehouses = all_warehouses[:5] if len(all_warehouses) > 5 else all_warehouses
+        selected_warehouses = st.multiselect(
+            "Select Warehouses",
+            options=all_warehouses,
+            default=default_warehouses,
+            key="weekly_cost_warehouse_selector"
         )
+        
+        if not selected_warehouses:
+            st.info("Select at least one warehouse to display the chart.")
+            return
+        
+        # Filter to selected warehouses
+        chart_data = weekly_agg[weekly_agg['WAREHOUSE_NAME'].isin(selected_warehouses)].copy()
+        chart_data = chart_data.sort_values('WEEK')
+        
+        # Create stacked bar chart
+        fig_stacked = px.bar(
+            chart_data,
+            x='WEEK_LABEL',
+            y='COST',
+            color='WAREHOUSE_NAME',
+            title=f'Weekly Warehouse Cost (${credit_price:.2f}/credit)',
+            labels={'COST': 'Cost ($)', 'WEEK_LABEL': 'Week', 'WAREHOUSE_NAME': 'Warehouse'}
+        )
+        fig_stacked.update_layout(
+            height=450,
+            barmode='stack',
+            xaxis_tickangle=-45,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+        )
+        fig_stacked.update_yaxes(tickprefix='$', tickformat=',.0f')
+        render_plotly_chart(fig_stacked)
     
     def render_daily_patterns_chart(self, data: pd.DataFrame) -> None:
         """Render daily usage patterns."""
-        st.markdown("#### 📊 Daily Usage Patterns")
+        st.markdown("#### Daily Usage Patterns")
+        st.caption("Aggregated patterns across the last 12 months")
         
-        # Hour-by-hour analysis
+        credit_price = st.session_state.get('credit_price', 3.0)
+        
         data['HOUR'] = data['START_TIME'].dt.hour
-        hourly_data = data.groupby('HOUR')['TOTAL_CREDITS'].mean().reset_index()
+        data['DAY_OF_WEEK'] = data['START_TIME'].dt.day_name()
+        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        
+        hourly_stats = data.groupby('HOUR')['TOTAL_CREDITS'].agg(['mean', 'sum']).reset_index()
+        daily_stats = data.groupby('DAY_OF_WEEK')['TOTAL_CREDITS'].agg(['mean', 'sum']).reindex(day_order).reset_index()
         
         col1, col2 = st.columns(2)
         
         with col1:
-            # Hourly patterns
-            fig_hourly = px.bar(
-                hourly_data,
-                x='HOUR',
-                y='TOTAL_CREDITS',
-                title='Average Credit Consumption by Hour of Day',
-                labels={'HOUR': 'Hour of Day', 'TOTAL_CREDITS': 'Average Credits'}
+            hourly_stats['COST'] = hourly_stats['mean'] * credit_price
+            max_cost = hourly_stats['COST'].max()
+            hourly_stats['intensity'] = hourly_stats['COST'] / max_cost
+            colors = [f'rgba(59, 130, 246, {0.3 + 0.7 * i})' for i in hourly_stats['intensity']]
+            
+            fig_hourly = go.Figure(data=go.Bar(
+                x=hourly_stats['HOUR'],
+                y=hourly_stats['COST'],
+                marker_color=colors,
+                hovertemplate='Hour %{x}:00<br>Avg Cost: $%{y:,.2f}<extra></extra>'
+            ))
+            fig_hourly.update_layout(
+                title='Average Hourly Cost Distribution',
+                xaxis_title='Hour of Day',
+                yaxis_title='Average Cost ($)',
+                height=350,
+                xaxis=dict(tickmode='linear', dtick=2),
+                yaxis=dict(tickprefix='$', tickformat=',.0f')
             )
-            fig_hourly.update_layout(height=400)
-            st.plotly_chart(fig_hourly, use_container_width=True)
+            render_plotly_chart(fig_hourly)
         
         with col2:
-            # Day of week patterns
-            data['DAY_OF_WEEK'] = data['START_TIME'].dt.day_name()
-            day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-            daily_data = data.groupby('DAY_OF_WEEK')['TOTAL_CREDITS'].sum().reindex(day_order).reset_index()
+            daily_stats['COST'] = daily_stats['sum'] * credit_price
+            max_daily = daily_stats['COST'].max()
+            daily_stats['intensity'] = daily_stats['COST'] / max_daily
+            colors_daily = [f'rgba(34, 197, 94, {0.3 + 0.7 * i})' for i in daily_stats['intensity']]
             
-            fig_daily = px.bar(
-                daily_data,
-                x='DAY_OF_WEEK',
-                y='TOTAL_CREDITS',
-                title='Total Credit Consumption by Day of Week',
-                labels={'DAY_OF_WEEK': 'Day of Week', 'TOTAL_CREDITS': 'Total Credits'}
+            fig_daily = go.Figure(data=go.Bar(
+                x=daily_stats['DAY_OF_WEEK'],
+                y=daily_stats['COST'],
+                marker_color=colors_daily,
+                hovertemplate='%{x}<br>Total Cost: $%{y:,.2f}<extra></extra>'
+            ))
+            fig_daily.update_layout(
+                title='Total Cost by Day of Week',
+                xaxis_title='',
+                yaxis_title='Total Cost ($)',
+                height=350,
+                xaxis=dict(tickangle=-45),
+                yaxis=dict(tickprefix='$', tickformat=',.0f')
             )
-            fig_daily.update_layout(height=400, xaxis_tickangle=-45)
-            st.plotly_chart(fig_daily, use_container_width=True)
+            render_plotly_chart(fig_daily)
     
     def render_consumption_insights(self, data: pd.DataFrame) -> None:
         """Render consumption insights and recommendations."""
-        st.markdown("#### 💡 Consumption Insights & Recommendations")
+        st.markdown("#### Consumption Insights & Recommendations")
         
         # Calculate key metrics for insights
         warehouse_data = data.groupby('WAREHOUSE_NAME').agg({
@@ -1795,7 +1889,7 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("**🔍 Analysis Results:**")
+            st.markdown("**Analysis Results:**")
             
             total_warehouses = len(warehouse_data)
             st.write(f"• **Total Active Warehouses**: {total_warehouses}")
@@ -1811,7 +1905,7 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
                 st.write(f"  - {top_warehouse['TOTAL_CREDITS']:,.0f} credits total")
         
         with col2:
-            st.markdown("**🎯 Recommendations:**")
+            st.markdown("**Recommendations:**")
             
             if len(high_cs_warehouses) > 0:
                 st.write("• **Investigate High Cloud Services Usage**:")
@@ -1855,8 +1949,8 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         Main entry point for rendering cloud services overhead analysis.
         Simplified version focusing on cloud services overhead monitoring.
         """
-        st.markdown(f"### {self.service_name} Analysis")
-        st.markdown(f"Cloud services overhead cost analysis showing credits used for metadata operations, compilation, and other cloud services.")
+        st.markdown("#### Cloud Services Credits")
+        st.caption("Last 12 months of cloud services overhead")
         
         # Check connection
         if not self.data_manager or not self.data_manager.session:
@@ -1868,8 +1962,8 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         
         # Handle empty result sets with appropriate messaging
         if cloud_services_data is None or cloud_services_data.empty:
-            st.warning("📊 No cloud services usage data found")
-            with st.expander("💡 **Possible Reasons & Solutions**"):
+            st.warning("No cloud services usage data found")
+            with st.expander("**Possible Reasons & Solutions**"):
                 st.markdown("""
                 **Why might cloud services data be empty?**
                 
@@ -1928,7 +2022,7 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
                     return None
                     
         except Exception as e:
-            st.error(f"❌ Failed to load cloud services data: {str(e)}")
+            st.error(f"Failed to load cloud services data: {str(e)}")
             return None
     
     def get_base_query(self, view_type: ViewType) -> str:
@@ -1975,9 +2069,6 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         
         # Calculate summary metrics
         total_cloud_services_credits = data['CREDITS_USED_CLOUD_SERVICES'].sum()
-        unique_warehouses = data['WAREHOUSE_NAME'].nunique()
-        unique_users = data['USER_NAME'].nunique()
-        total_queries = len(data)
         
         # Get current month data for MoM comparison
         current_month = data['START_TIME'].max().to_period('M')
@@ -1994,74 +2085,24 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         else:
             mom_change = 0
         
-        st.markdown("#### ☁️ Cloud Services Overhead Overview")
-        
-        # Display metrics in columns
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2 = st.columns(2)
         
         with col1:
             st.metric(
-                label="☁️ Total Cloud Services Credits",
-                value=f"{total_cloud_services_credits:,.2f}",
-                help="Total overhead credits for metadata, compilation, and cloud services"
+                label="Total Cloud Services Credits (12 mo)",
+                value=format_credits_with_dollars(total_cloud_services_credits),
+                help="Total overhead credits for metadata, compilation, and cloud services over the last 12 months"
             )
         
         with col2:
+            prev_month_str = prev_month.strftime('%b %Y')
+            current_month_str = current_month.strftime('%b %Y')
+            delta_help = f"Change from {prev_month_str} to {current_month_str}"
             st.metric(
-                label="📊 Current Month",
-                value=f"{current_month_credits:,.2f}",
-                delta=f"{mom_change:+.1f}%" if mom_change != 0 else None,
-                help=f"Cloud services credits for {current_month}"
-            )
-        
-        with col3:
-            st.metric(
-                label="🔍 Total Queries",
-                value=f"{total_queries:,}",
-                help="Total queries that consumed cloud services credits"
-            )
-        
-        with col4:
-            avg_credits_per_query = total_cloud_services_credits / total_queries if total_queries > 0 else 0
-            st.metric(
-                label="📈 Avg Credits/Query",
-                value=f"{avg_credits_per_query:.4f}",
-                help="Average cloud services credits per query"
-            )
-        
-        # Additional metrics row
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric(
-                label="🏭 Active Warehouses",
-                value=f"{unique_warehouses}",
-                help="Number of warehouses generating cloud services credits"
-            )
-        
-        with col2:
-            st.metric(
-                label="👥 Active Users",
-                value=f"{unique_users}",
-                help="Number of users generating cloud services credits"
-            )
-        
-        with col3:
-            avg_daily_credits = data.groupby(data['START_TIME'].dt.date)['CREDITS_USED_CLOUD_SERVICES'].sum().mean()
-            st.metric(
-                label="📅 Daily Average",
-                value=f"{avg_daily_credits:,.2f}",
-                help="Average daily cloud services credits"
-            )
-        
-        with col4:
-            # Find peak day
-            daily_consumption = data.groupby(data['START_TIME'].dt.date)['CREDITS_USED_CLOUD_SERVICES'].sum()
-            peak_daily = daily_consumption.max()
-            st.metric(
-                label="📊 Peak Daily Usage",
-                value=f"{peak_daily:,.2f}",
-                help="Highest single-day cloud services credits"
+                label=f"Current Month ({current_month_str})",
+                value=format_credits_with_dollars(current_month_credits),
+                delta=f"{mom_change:+.1f}% vs {prev_month_str}" if mom_change != 0 else None,
+                help=delta_help
             )
     
     def render_cloud_services_charts(self, data: pd.DataFrame) -> None:
@@ -2079,23 +2120,17 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         data['START_TIME'] = pd.to_datetime(data['START_TIME'])
         
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 Trends", "🏭 By Warehouse", "🔍 By Query Type", "💡 Optimization"])
+        tab1, tab2 = st.tabs(["Trends", "By Query Type"])
         
         with tab1:
             self.render_cloud_services_trends_chart(data)
         
         with tab2:
-            self.render_warehouse_cloud_services_chart(data)
-        
-        with tab3:
             self.render_query_type_analysis(data)
-            
-        with tab4:
-            self.render_cloud_services_optimization(data)
     
     def render_cloud_services_trends_chart(self, data: pd.DataFrame) -> None:
         """Render cloud services trends over time."""
-        st.markdown("#### 📈 Cloud Services Usage Trends")
+        st.markdown("#### Cloud Services Usage Trends")
         
         # Daily aggregation
         daily_data = data.groupby(data['START_TIME'].dt.date).agg({
@@ -2117,7 +2152,7 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
             )
             fig_credits.update_traces(line=dict(color='#ff7f0e', width=3))
             fig_credits.update_layout(height=400)
-            st.plotly_chart(fig_credits, use_container_width=True)
+            render_plotly_chart(fig_credits)
         
         with col2:
             # Daily query count
@@ -2130,25 +2165,13 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
             )
             fig_queries.update_traces(line=dict(color='#2ca02c', width=3))
             fig_queries.update_layout(height=400)
-            st.plotly_chart(fig_queries, use_container_width=True)
+            render_plotly_chart(fig_queries)
         
-        # Credits per query over time
-        daily_data['CREDITS_PER_QUERY'] = daily_data['CREDITS_USED_CLOUD_SERVICES'] / daily_data['QUERY_COUNT']
-        
-        fig_efficiency = px.line(
-            daily_data,
-            x='START_TIME',
-            y='CREDITS_PER_QUERY',
-            title='Cloud Services Efficiency Over Time (Credits per Query)',
-            labels={'START_TIME': 'Date', 'CREDITS_PER_QUERY': 'Credits per Query'}
-        )
-        fig_efficiency.update_traces(line=dict(color='#d62728', width=2))
-        fig_efficiency.update_layout(height=400)
-        st.plotly_chart(fig_efficiency, use_container_width=True)
+
     
     def render_warehouse_cloud_services_chart(self, data: pd.DataFrame) -> None:
         """Render cloud services breakdown by warehouse."""
-        st.markdown("#### 🏭 Cloud Services by Warehouse")
+        st.markdown("#### Cloud Services by Warehouse")
         
         # Aggregate by warehouse
         warehouse_data = data.groupby('WAREHOUSE_NAME').agg({
@@ -2172,7 +2195,7 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
                 labels={'CREDITS_USED_CLOUD_SERVICES': 'Credits Used', 'WAREHOUSE_NAME': 'Warehouse'}
             )
             fig_bar.update_layout(height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            render_plotly_chart(fig_bar)
         
         with col2:
             # Credits per query by warehouse
@@ -2185,10 +2208,10 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
                 labels={'CREDITS_PER_QUERY': 'Credits per Query', 'WAREHOUSE_NAME': 'Warehouse'}
             )
             fig_efficiency.update_layout(height=400)
-            st.plotly_chart(fig_efficiency, use_container_width=True)
+            render_plotly_chart(fig_efficiency)
         
         # Detailed warehouse table
-        st.markdown("#### 📋 Warehouse Cloud Services Details")
+        st.markdown("#### Warehouse Cloud Services Details")
         
         display_data = warehouse_data.copy()
         display_data['CREDITS_FORMATTED'] = display_data['CREDITS_USED_CLOUD_SERVICES'].apply(lambda x: f"{x:,.4f}")
@@ -2208,7 +2231,9 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
     
     def render_query_type_analysis(self, data: pd.DataFrame) -> None:
         """Render analysis by query type."""
-        st.markdown("#### 🔍 Cloud Services by Query Type")
+        st.markdown("#### Cloud Services by Query Type")
+        
+        credit_price = st.session_state.get('credit_price', 3.0)
         
         # Aggregate by query type
         query_type_data = data.groupby('QUERY_TYPE').agg({
@@ -2218,44 +2243,55 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         }).reset_index().sort_values('CREDITS_USED_CLOUD_SERVICES', ascending=False)
         query_type_data.rename(columns={'QUERY_ID': 'QUERY_COUNT'}, inplace=True)
         query_type_data['CREDITS_PER_QUERY'] = query_type_data['CREDITS_USED_CLOUD_SERVICES'] / query_type_data['QUERY_COUNT']
+        query_type_data['COST'] = query_type_data['CREDITS_USED_CLOUD_SERVICES'] * credit_price
         
         col1, col2 = st.columns(2)
         
         with col1:
-            # Credits by query type
+            # Cost by query type
             fig_type = px.pie(
                 query_type_data,
-                values='CREDITS_USED_CLOUD_SERVICES',
+                values='COST',
                 names='QUERY_TYPE',
-                title='Cloud Services Credits by Query Type'
+                title='Cloud Services Cost by Query Type'
             )
-            fig_type.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_type, use_container_width=True)
+            fig_type.update_traces(
+                textposition='inside', 
+                textinfo='percent+label',
+                hovertemplate='<b>%{label}</b><br>Cost: $%{value:,.2f}<br>%{percent}<extra></extra>'
+            )
+            render_plotly_chart(fig_type)
         
         with col2:
-            # Query count by type
-            fig_count = px.bar(
+            # Cost bar chart by type
+            fig_cost = px.bar(
                 query_type_data,
                 x='QUERY_TYPE',
-                y='QUERY_COUNT',
-                title='Query Count by Type',
-                labels={'QUERY_TYPE': 'Query Type', 'QUERY_COUNT': 'Number of Queries'}
+                y='COST',
+                title='Cost by Query Type',
+                labels={'QUERY_TYPE': 'Query Type', 'COST': 'Cost ($)'}
             )
-            fig_count.update_layout(xaxis_tickangle=-45, height=400)
-            st.plotly_chart(fig_count, use_container_width=True)
+            fig_cost.update_layout(xaxis_tickangle=-45, height=400)
+            fig_cost.update_traces(
+                marker_color='#ff7f0e',
+                hovertemplate='<b>%{x}</b><br>Cost: $%{y:,.2f}<extra></extra>'
+            )
+            render_plotly_chart(fig_cost)
         
         # Query type efficiency table
-        st.markdown("#### 📊 Query Type Analysis")
+        st.markdown("#### Query Type Analysis")
         
         display_data = query_type_data.copy()
+        display_data['COST_FORMATTED'] = display_data['COST'].apply(lambda x: f"${x:,.2f}")
         display_data['CREDITS_FORMATTED'] = display_data['CREDITS_USED_CLOUD_SERVICES'].apply(lambda x: f"{x:,.4f}")
         display_data['CREDITS_PER_QUERY_FORMATTED'] = display_data['CREDITS_PER_QUERY'].apply(lambda x: f"{x:,.6f}")
         display_data['AVG_ELAPSED_TIME'] = display_data['TOTAL_ELAPSED_TIME'].apply(lambda x: f"{x:,.0f} ms" if not pd.isna(x) else "N/A")
         
         st.dataframe(
-            display_data[['QUERY_TYPE', 'CREDITS_FORMATTED', 'QUERY_COUNT', 'CREDITS_PER_QUERY_FORMATTED', 'AVG_ELAPSED_TIME']],
+            display_data[['QUERY_TYPE', 'COST_FORMATTED', 'CREDITS_FORMATTED', 'QUERY_COUNT', 'CREDITS_PER_QUERY_FORMATTED', 'AVG_ELAPSED_TIME']],
             column_config={
                 'QUERY_TYPE': 'Query Type',
+                'COST_FORMATTED': 'Cost',
                 'CREDITS_FORMATTED': 'Total Credits',
                 'QUERY_COUNT': 'Query Count',
                 'CREDITS_PER_QUERY_FORMATTED': 'Credits per Query',
@@ -2267,7 +2303,7 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
     
     def render_cloud_services_optimization(self, data: pd.DataFrame) -> None:
         """Render cloud services optimization recommendations."""
-        st.markdown("#### 💡 Cloud Services Optimization")
+        st.markdown("#### Cloud Services Optimization")
         
         # Calculate optimization metrics
         warehouse_data = data.groupby('WAREHOUSE_NAME').agg({
@@ -2283,7 +2319,7 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("**🔍 Analysis Results:**")
+            st.markdown("**Analysis Results:**")
             
             total_credits = data['CREDITS_USED_CLOUD_SERVICES'].sum()
             total_queries = len(data)
@@ -2298,7 +2334,7 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
                 st.write("  - Above 75th percentile for credits per query")
         
         with col2:
-            st.markdown("**🎯 Optimization Recommendations:**")
+            st.markdown("**Optimization Recommendations:**")
             
             # Query type analysis for recommendations
             query_types = data['QUERY_TYPE'].value_counts()
@@ -2349,12 +2385,10 @@ class ReplicationAnalyzer(ServiceAnalyzer):
         Main entry point for rendering replication cost analysis.
         Simplified version focusing on replication and data sharing costs.
         """
-        st.markdown(f"### {self.service_name} Analysis")
-        st.markdown(f"Replication cost analysis showing credits used for data replication and sharing across regions and accounts.")
         
         # Check connection
         if not self.data_manager or not self.data_manager.session:
-            st.error("❌ No active Snowflake session available")
+            st.error("No active Snowflake session available")
             return
         
         # Get replication data
@@ -2362,8 +2396,8 @@ class ReplicationAnalyzer(ServiceAnalyzer):
         
         # Handle empty result sets with appropriate messaging
         if replication_data is None or replication_data.empty:
-            st.warning("📊 No replication usage data found")
-            with st.expander("💡 **Possible Reasons & Solutions**"):
+            st.warning("No replication usage data found")
+            with st.expander("**Possible Reasons & Solutions**"):
                 st.markdown("""
                 **Why might replication data be empty?**
                 
@@ -2488,36 +2522,36 @@ class ReplicationAnalyzer(ServiceAnalyzer):
         else:
             mom_change = 0
         
-        st.markdown("#### 🔄 Replication Cost Overview")
+        st.markdown("#### Replication Cost Overview")
         
         # Display metrics in columns
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.metric(
-                label="🔄 Total Replication Credits",
-                value=f"{total_replication_credits:,.2f}",
+                label="Total Replication Credits",
+                value=format_credits_with_dollars(total_replication_credits),
                 help="Total credits used for data replication and sharing"
             )
         
         with col2:
             st.metric(
-                label="📊 Current Month",
-                value=f"{current_month_credits:,.2f}",
+                label="Current Month",
+                value=format_credits_with_dollars(current_month_credits),
                 delta=f"{mom_change:+.1f}%" if mom_change != 0 else None,
                 help=f"Replication credits for {current_month}"
             )
         
         with col3:
             st.metric(
-                label="📦 Data Transferred",
+                label="Data Transferred",
                 value=f"{total_bytes_transferred / (1024**3):,.1f} GB",
                 help="Total data transferred through replication"
             )
         
         with col4:
             st.metric(
-                label="🔗 Replication Groups",
+                label="Replication Groups",
                 value=f"{unique_replication_groups}",
                 help="Number of active replication groups"
             )
@@ -2527,7 +2561,7 @@ class ReplicationAnalyzer(ServiceAnalyzer):
         
         with col1:
             st.metric(
-                label="🔄 Replication Sessions",
+                label="Replication Sessions",
                 value=f"{total_replication_sessions:,}",
                 help="Total replication sessions executed"
             )
@@ -2535,27 +2569,20 @@ class ReplicationAnalyzer(ServiceAnalyzer):
         with col2:
             avg_credits_per_session = total_replication_credits / total_replication_sessions if total_replication_sessions > 0 else 0
             st.metric(
-                label="📈 Avg Credits/Session",
-                value=f"{avg_credits_per_session:.4f}",
+                label="Avg Credits/Session",
+                value=format_credits_with_dollars(avg_credits_per_session),
                 help="Average credits per replication session"
             )
         
         with col3:
             avg_bytes_per_session = total_bytes_transferred / total_replication_sessions if total_replication_sessions > 0 else 0
             st.metric(
-                label="📦 Avg Data/Session",
+                label="Avg Data/Session",
                 value=f"{avg_bytes_per_session / (1024**2):,.1f} MB",
                 help="Average data transferred per session"
             )
         
-        with col4:
-            # Calculate efficiency (GB per credit)
-            efficiency = (total_bytes_transferred / (1024**3)) / total_replication_credits if total_replication_credits > 0 else 0
-            st.metric(
-                label="⚡ Efficiency",
-                value=f"{efficiency:.2f} GB/credit",
-                help="Data transfer efficiency (GB per credit)"
-            )
+
     
     def render_replication_charts(self, data: pd.DataFrame) -> None:
         """
@@ -2572,23 +2599,17 @@ class ReplicationAnalyzer(ServiceAnalyzer):
         data['START_TIME'] = pd.to_datetime(data['START_TIME'])
         
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 Trends", "🔗 By Group", "📊 Data Transfer", "💡 Optimization"])
+        tab1, tab2 = st.tabs(["Trends", "By Group"])
         
         with tab1:
             self.render_replication_trends_chart(data)
         
         with tab2:
             self.render_replication_group_chart(data)
-        
-        with tab3:
-            self.render_data_transfer_analysis(data)
-            
-        with tab4:
-            self.render_replication_optimization(data)
     
     def render_replication_trends_chart(self, data: pd.DataFrame) -> None:
         """Render replication trends over time."""
-        st.markdown("#### 📈 Replication Usage Trends")
+        st.markdown("#### Replication Usage Trends")
         
         # Daily aggregation
         daily_data = data.groupby(data['START_TIME'].dt.date).agg({
@@ -2611,7 +2632,7 @@ class ReplicationAnalyzer(ServiceAnalyzer):
             )
             fig_credits.update_traces(line=dict(color='#9467bd', width=3))
             fig_credits.update_layout(height=400)
-            st.plotly_chart(fig_credits, use_container_width=True)
+            render_plotly_chart(fig_credits)
         
         with col2:
             # Daily data transfer
@@ -2625,26 +2646,13 @@ class ReplicationAnalyzer(ServiceAnalyzer):
             )
             fig_transfer.update_traces(line=dict(color='#8c564b', width=3))
             fig_transfer.update_layout(height=400)
-            st.plotly_chart(fig_transfer, use_container_width=True)
+            render_plotly_chart(fig_transfer)
         
-        # Efficiency over time
-        daily_data['EFFICIENCY'] = daily_data['BYTES_TRANSFERRED_GB'] / daily_data['CREDITS_USED']
-        daily_data['EFFICIENCY'] = daily_data['EFFICIENCY'].replace([float('inf'), -float('inf')], 0)
-        
-        fig_efficiency = px.line(
-            daily_data,
-            x='START_TIME',
-            y='EFFICIENCY',
-            title='Replication Efficiency Over Time (GB per Credit)',
-            labels={'START_TIME': 'Date', 'EFFICIENCY': 'GB per Credit'}
-        )
-        fig_efficiency.update_traces(line=dict(color='#e377c2', width=2))
-        fig_efficiency.update_layout(height=400)
-        st.plotly_chart(fig_efficiency, use_container_width=True)
+
     
     def render_replication_group_chart(self, data: pd.DataFrame) -> None:
         """Render replication breakdown by group."""
-        st.markdown("#### 🔗 Replication by Group")
+        st.markdown("#### Replication by Group")
         
         # Aggregate by replication group
         group_data = data.groupby('REPLICATION_GROUP_NAME').agg({
@@ -2669,7 +2677,7 @@ class ReplicationAnalyzer(ServiceAnalyzer):
                 labels={'CREDITS_USED': 'Credits Used', 'REPLICATION_GROUP_NAME': 'Replication Group'}
             )
             fig_bar.update_layout(height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            render_plotly_chart(fig_bar)
         
         with col2:
             # Credits distribution pie chart
@@ -2680,21 +2688,25 @@ class ReplicationAnalyzer(ServiceAnalyzer):
                 title='Credit Distribution by Group (Top 8)'
             )
             fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
+            render_plotly_chart(fig_pie)
         
         # Detailed group table
-        st.markdown("#### 📋 Replication Group Details")
+        st.markdown("#### Replication Group Details")
         
+        credit_price = st.session_state.get('credit_price', 3.0)
         display_data = group_data.copy()
+        display_data['COST'] = display_data['CREDITS_USED'] * credit_price
+        display_data['COST_FORMATTED'] = display_data['COST'].apply(lambda x: f"${x:,.2f}")
         display_data['CREDITS_FORMATTED'] = display_data['CREDITS_USED'].apply(lambda x: f"{x:,.4f}")
         display_data['DATA_TRANSFERRED_FORMATTED'] = display_data['BYTES_TRANSFERRED_GB'].apply(lambda x: f"{x:,.2f} GB")
         display_data['CREDITS_PER_SESSION_FORMATTED'] = display_data['CREDITS_PER_SESSION'].apply(lambda x: f"{x:,.6f}")
         
         st.dataframe(
-            display_data[['REPLICATION_GROUP_NAME', 'CREDITS_FORMATTED', 'DATA_TRANSFERRED_FORMATTED', 
+            display_data[['REPLICATION_GROUP_NAME', 'COST_FORMATTED', 'CREDITS_FORMATTED', 'DATA_TRANSFERRED_FORMATTED', 
                          'SESSION_COUNT', 'CREDITS_PER_SESSION_FORMATTED']],
             column_config={
                 'REPLICATION_GROUP_NAME': 'Replication Group',
+                'COST_FORMATTED': 'Total Cost',
                 'CREDITS_FORMATTED': 'Total Credits',
                 'DATA_TRANSFERRED_FORMATTED': 'Data Transferred',
                 'SESSION_COUNT': 'Sessions',
@@ -2706,7 +2718,7 @@ class ReplicationAnalyzer(ServiceAnalyzer):
     
     def render_data_transfer_analysis(self, data: pd.DataFrame) -> None:
         """Render data transfer analysis."""
-        st.markdown("#### 📊 Data Transfer Analysis")
+        st.markdown("#### Data Transfer Analysis")
         
         # Convert bytes to GB for better readability
         data = data.copy()
@@ -2726,7 +2738,7 @@ class ReplicationAnalyzer(ServiceAnalyzer):
                 hover_data=['DURATION_HOURS']
             )
             fig_scatter.update_layout(height=400)
-            st.plotly_chart(fig_scatter, use_container_width=True)
+            render_plotly_chart(fig_scatter)
         
         with col2:
             # Duration analysis
@@ -2738,10 +2750,10 @@ class ReplicationAnalyzer(ServiceAnalyzer):
                 nbins=20
             )
             fig_duration.update_layout(height=400)
-            st.plotly_chart(fig_duration, use_container_width=True)
+            render_plotly_chart(fig_duration)
         
         # Transfer efficiency analysis
-        st.markdown("#### ⚡ Transfer Efficiency Analysis")
+        st.markdown("#### Transfer Efficiency Analysis")
         
         # Calculate efficiency metrics
         data['EFFICIENCY'] = data['BYTES_TRANSFERRED_GB'] / data['CREDITS_USED']
@@ -2760,11 +2772,11 @@ class ReplicationAnalyzer(ServiceAnalyzer):
             labels={'AVG_EFFICIENCY': 'Average Efficiency (GB/Credit)', 'REPLICATION_GROUP_NAME': 'Replication Group'}
         )
         fig_efficiency.update_layout(height=400)
-        st.plotly_chart(fig_efficiency, use_container_width=True)
+        render_plotly_chart(fig_efficiency)
     
     def render_replication_optimization(self, data: pd.DataFrame) -> None:
         """Render replication optimization recommendations."""
-        st.markdown("#### 💡 Replication Optimization")
+        st.markdown("#### Replication Optimization")
         
         # Calculate optimization metrics
         group_data = data.groupby('REPLICATION_GROUP_NAME').agg({
@@ -2787,7 +2799,7 @@ class ReplicationAnalyzer(ServiceAnalyzer):
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("**🔍 Analysis Results:**")
+            st.markdown("**Analysis Results:**")
             
             total_credits = data['CREDITS_USED'].sum()
             total_data_gb = data['BYTES_TRANSFERRED'].sum() / (1024**3)
@@ -2804,7 +2816,7 @@ class ReplicationAnalyzer(ServiceAnalyzer):
                 st.write("  - Above 75th percentile for total credits")
         
         with col2:
-            st.markdown("**🎯 Optimization Recommendations:**")
+            st.markdown("**Optimization Recommendations:**")
             
             if len(low_efficiency_groups) > 0:
                 st.write("• **Low Efficiency Groups**:")
@@ -2855,12 +2867,11 @@ class ClusteringAnalyzer(ServiceAnalyzer):
         Main entry point for rendering clustering cost analysis.
         Simplified version focusing on automatic clustering costs and optimization.
         """
-        st.markdown(f"### {self.service_name} Analysis")
-        st.markdown(f"Automatic clustering cost analysis showing credits used for table clustering operations and optimization recommendations.")
+        st.caption("Last 12 months")
         
         # Check connection
         if not self.data_manager or not self.data_manager.session:
-            st.error("❌ No active Snowflake session available")
+            st.error("No active Snowflake session available")
             return
         
         # Get clustering data
@@ -2868,8 +2879,8 @@ class ClusteringAnalyzer(ServiceAnalyzer):
         
         # Handle empty result sets with appropriate messaging
         if clustering_data is None or clustering_data.empty:
-            st.warning("📊 No automatic clustering usage data found")
-            with st.expander("💡 **Possible Reasons & Solutions**"):
+            st.warning("No automatic clustering usage data found")
+            with st.expander("**Possible Reasons & Solutions**"):
                 st.markdown("""
                 **Why might clustering data be empty?**
                 
@@ -3000,72 +3011,26 @@ class ClusteringAnalyzer(ServiceAnalyzer):
         else:
             mom_change = 0
         
-        st.markdown("#### 🔄 Automatic Clustering Cost Overview")
+        st.markdown("#### Automatic Clustering Cost Overview")
         
         # Display metrics in columns
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2 = st.columns(2)
         
         with col1:
             st.metric(
-                label="🔄 Total Clustering Credits",
-                value=f"{total_clustering_credits:,.2f}",
-                help="Total credits used for automatic clustering operations"
+                label="Total Clustering Credits (12 mo)",
+                value=format_credits_with_dollars(total_clustering_credits),
+                help="Total credits used for automatic clustering operations over the last 12 months"
             )
         
         with col2:
+            prev_month_str = prev_month.strftime('%b %Y')
+            current_month_str = current_month.strftime('%b %Y')
             st.metric(
-                label="📊 Current Month",
-                value=f"{current_month_credits:,.2f}",
-                delta=f"{mom_change:+.1f}%" if mom_change != 0 else None,
-                help=f"Clustering credits for {current_month}"
-            )
-        
-        with col3:
-            st.metric(
-                label="📦 Data Reclustered",
-                value=f"{total_bytes_reclustered / (1024**3):,.1f} GB",
-                help="Total data reclustered through automatic clustering"
-            )
-        
-        with col4:
-            st.metric(
-                label="📋 Tables Clustered",
-                value=f"{unique_tables}",
-                help="Number of tables with clustering activity"
-            )
-        
-        # Additional metrics row
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric(
-                label="🔄 Clustering Operations",
-                value=f"{total_clustering_operations:,}",
-                help="Total clustering operations executed"
-            )
-        
-        with col2:
-            avg_credits_per_operation = total_clustering_credits / total_clustering_operations if total_clustering_operations > 0 else 0
-            st.metric(
-                label="📈 Avg Credits/Operation",
-                value=f"{avg_credits_per_operation:.4f}",
-                help="Average credits per clustering operation"
-            )
-        
-        with col3:
-            st.metric(
-                label="📊 Rows Reclustered",
-                value=f"{total_rows_reclustered / 1_000_000:,.1f}M",
-                help="Total rows reclustered (millions)"
-            )
-        
-        with col4:
-            # Calculate efficiency (GB per credit)
-            efficiency = (total_bytes_reclustered / (1024**3)) / total_clustering_credits if total_clustering_credits > 0 else 0
-            st.metric(
-                label="⚡ Efficiency",
-                value=f"{efficiency:.2f} GB/credit",
-                help="Clustering efficiency (GB reclustered per credit)"
+                label=f"Current Month ({current_month_str})",
+                value=format_credits_with_dollars(current_month_credits),
+                delta=f"{mom_change:+.1f}% vs {prev_month_str}" if mom_change != 0 else None,
+                help=f"Change from {prev_month_str} to {current_month_str}"
             )
     
     def render_clustering_charts(self, data: pd.DataFrame) -> None:
@@ -3083,23 +3048,17 @@ class ClusteringAnalyzer(ServiceAnalyzer):
         data['START_TIME'] = pd.to_datetime(data['START_TIME'])
         
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 Trends", "📋 By Table", "📊 Operations", "💡 Optimization"])
+        tab1, tab2 = st.tabs(["Trends", "By Table"])
         
         with tab1:
             self.render_clustering_trends_chart(data)
         
         with tab2:
             self.render_table_clustering_chart(data)
-        
-        with tab3:
-            self.render_clustering_operations_analysis(data)
-            
-        with tab4:
-            self.render_clustering_optimization(data)
     
     def render_clustering_trends_chart(self, data: pd.DataFrame) -> None:
         """Render clustering trends over time."""
-        st.markdown("#### 📈 Clustering Usage Trends")
+        st.markdown("#### Clustering Usage Trends")
         
         # Daily aggregation
         daily_data = data.groupby(data['START_TIME'].dt.date).agg({
@@ -3123,7 +3082,7 @@ class ClusteringAnalyzer(ServiceAnalyzer):
             )
             fig_credits.update_traces(line=dict(color='#17becf', width=3))
             fig_credits.update_layout(height=400)
-            st.plotly_chart(fig_credits, use_container_width=True)
+            render_plotly_chart(fig_credits)
         
         with col2:
             # Daily data reclustered
@@ -3137,26 +3096,13 @@ class ClusteringAnalyzer(ServiceAnalyzer):
             )
             fig_data.update_traces(line=dict(color='#bcbd22', width=3))
             fig_data.update_layout(height=400)
-            st.plotly_chart(fig_data, use_container_width=True)
+            render_plotly_chart(fig_data)
         
-        # Efficiency over time
-        daily_data['EFFICIENCY'] = daily_data['BYTES_RECLUSTERED_GB'] / daily_data['CREDITS_USED']
-        daily_data['EFFICIENCY'] = daily_data['EFFICIENCY'].replace([float('inf'), -float('inf')], 0)
-        
-        fig_efficiency = px.line(
-            daily_data,
-            x='START_TIME',
-            y='EFFICIENCY',
-            title='Clustering Efficiency Over Time (GB per Credit)',
-            labels={'START_TIME': 'Date', 'EFFICIENCY': 'GB per Credit'}
-        )
-        fig_efficiency.update_traces(line=dict(color='#ff7f0e', width=2))
-        fig_efficiency.update_layout(height=400)
-        st.plotly_chart(fig_efficiency, use_container_width=True)
+
     
     def render_table_clustering_chart(self, data: pd.DataFrame) -> None:
         """Render clustering breakdown by table."""
-        st.markdown("#### 📋 Clustering by Table")
+        st.markdown("#### Clustering by Table")
         
         # Aggregate by table
         table_data = data.groupby('FULL_TABLE_NAME').agg({
@@ -3183,7 +3129,7 @@ class ClusteringAnalyzer(ServiceAnalyzer):
                 labels={'CREDITS_USED': 'Credits Used', 'FULL_TABLE_NAME': 'Table'}
             )
             fig_bar.update_layout(height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            render_plotly_chart(fig_bar)
         
         with col2:
             # Credits distribution pie chart
@@ -3194,22 +3140,26 @@ class ClusteringAnalyzer(ServiceAnalyzer):
                 title='Credit Distribution by Table (Top 8)'
             )
             fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
+            render_plotly_chart(fig_pie)
         
         # Detailed table breakdown
-        st.markdown("#### 📋 Table Clustering Details")
+        st.markdown("#### Table Clustering Details")
         
+        credit_price = st.session_state.get('credit_price', 3.0)
         display_data = table_data.copy()
+        display_data['COST'] = display_data['CREDITS_USED'] * credit_price
+        display_data['COST_FORMATTED'] = display_data['COST'].apply(lambda x: f"${x:,.2f}")
         display_data['CREDITS_FORMATTED'] = display_data['CREDITS_USED'].apply(lambda x: f"{x:,.4f}")
         display_data['DATA_RECLUSTERED_FORMATTED'] = display_data['BYTES_RECLUSTERED_GB'].apply(lambda x: f"{x:,.2f} GB")
         display_data['ROWS_RECLUSTERED_FORMATTED'] = display_data['NUM_ROWS_RECLUSTERED'].apply(lambda x: f"{x:,.0f}")
         display_data['CREDITS_PER_OP_FORMATTED'] = display_data['CREDITS_PER_OPERATION'].apply(lambda x: f"{x:,.6f}")
         
         st.dataframe(
-            display_data[['FULL_TABLE_NAME', 'CREDITS_FORMATTED', 'DATA_RECLUSTERED_FORMATTED', 
+            display_data[['FULL_TABLE_NAME', 'COST_FORMATTED', 'CREDITS_FORMATTED', 'DATA_RECLUSTERED_FORMATTED', 
                          'ROWS_RECLUSTERED_FORMATTED', 'OPERATION_COUNT', 'CREDITS_PER_OP_FORMATTED']],
             column_config={
                 'FULL_TABLE_NAME': 'Table Name',
+                'COST_FORMATTED': 'Total Cost',
                 'CREDITS_FORMATTED': 'Total Credits',
                 'DATA_RECLUSTERED_FORMATTED': 'Data Reclustered',
                 'ROWS_RECLUSTERED_FORMATTED': 'Rows Reclustered',
@@ -3222,7 +3172,7 @@ class ClusteringAnalyzer(ServiceAnalyzer):
     
     def render_clustering_operations_analysis(self, data: pd.DataFrame) -> None:
         """Render clustering operations analysis."""
-        st.markdown("#### 📊 Clustering Operations Analysis")
+        st.markdown("#### Clustering Operations Analysis")
         
         # Convert bytes to GB for better readability
         data = data.copy()
@@ -3242,7 +3192,7 @@ class ClusteringAnalyzer(ServiceAnalyzer):
                 hover_data=['NUM_ROWS_RECLUSTERED', 'DURATION_MINUTES']
             )
             fig_scatter.update_layout(height=400, showlegend=False)  # Hide legend for readability
-            st.plotly_chart(fig_scatter, use_container_width=True)
+            render_plotly_chart(fig_scatter)
         
         with col2:
             # Duration analysis
@@ -3254,10 +3204,10 @@ class ClusteringAnalyzer(ServiceAnalyzer):
                 nbins=20
             )
             fig_duration.update_layout(height=400)
-            st.plotly_chart(fig_duration, use_container_width=True)
+            render_plotly_chart(fig_duration)
         
         # Operation size analysis
-        st.markdown("#### 📊 Operation Size Analysis")
+        st.markdown("#### Operation Size Analysis")
         
         col1, col2 = st.columns(2)
         
@@ -3272,7 +3222,7 @@ class ClusteringAnalyzer(ServiceAnalyzer):
                 nbins=15
             )
             fig_rows.update_layout(height=400)
-            st.plotly_chart(fig_rows, use_container_width=True)
+            render_plotly_chart(fig_rows)
         
         with col2:
             # Credits vs rows efficiency
@@ -3288,11 +3238,11 @@ class ClusteringAnalyzer(ServiceAnalyzer):
                 hover_data=['FULL_TABLE_NAME']
             )
             fig_efficiency.update_layout(height=400)
-            st.plotly_chart(fig_efficiency, use_container_width=True)
+            render_plotly_chart(fig_efficiency)
     
     def render_clustering_optimization(self, data: pd.DataFrame) -> None:
         """Render clustering optimization recommendations."""
-        st.markdown("#### 💡 Clustering Optimization")
+        st.markdown("#### Clustering Optimization")
         
         # Calculate optimization metrics
         table_data = data.groupby('FULL_TABLE_NAME').agg({
@@ -3319,7 +3269,7 @@ class ClusteringAnalyzer(ServiceAnalyzer):
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("**🔍 Analysis Results:**")
+            st.markdown("**Analysis Results:**")
             
             total_credits = data['CREDITS_USED'].sum()
             total_data_gb = data['NUM_BYTES_RECLUSTERED'].sum() / (1024**3)
@@ -3340,7 +3290,7 @@ class ClusteringAnalyzer(ServiceAnalyzer):
                 st.write("  - Above 75th percentile for operation count")
         
         with col2:
-            st.markdown("**🎯 Optimization Recommendations:**")
+            st.markdown("**Optimization Recommendations:**")
             
             if len(low_efficiency_tables) > 0:
                 st.write("• **Low Efficiency Tables**:")
@@ -3394,12 +3344,11 @@ class ServerlessAnalyzer(ServiceAnalyzer):
         Main entry point for rendering serverless cost analysis.
         Simplified version focusing on serverless computing costs and optimization.
         """
-        st.markdown(f"### {self.service_name} Analysis")
-        st.markdown(f"Serverless computing cost analysis showing credits used for serverless tasks and optimization recommendations.")
+        st.caption("Last 12 months")
         
         # Check connection
         if not self.data_manager or not self.data_manager.session:
-            st.error("❌ No active Snowflake session available")
+            st.error("No active Snowflake session available")
             return
         
         # Get serverless data
@@ -3407,8 +3356,8 @@ class ServerlessAnalyzer(ServiceAnalyzer):
         
         # Handle empty result sets with appropriate messaging
         if serverless_data is None or serverless_data.empty:
-            st.warning("📊 No serverless computing usage data found")
-            with st.expander("💡 **Possible Reasons & Solutions**"):
+            st.warning("No serverless computing usage data found")
+            with st.expander("**Possible Reasons & Solutions**"):
                 st.markdown("""
                 **Why might serverless data be empty?**
                 
@@ -3536,74 +3485,26 @@ class ServerlessAnalyzer(ServiceAnalyzer):
         else:
             mom_change = 0
         
-        st.markdown("#### ⚡ Serverless Computing Cost Overview")
+        st.markdown("#### Serverless Computing Cost Overview")
         
         # Display metrics in columns
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2 = st.columns(2)
         
         with col1:
             st.metric(
-                label="⚡ Total Serverless Credits",
-                value=f"{total_serverless_credits:,.2f}",
-                help="Total credits used for serverless task executions"
+                label="Total Serverless Credits (12 mo)",
+                value=format_credits_with_dollars(total_serverless_credits),
+                help="Total credits used for serverless task executions over the last 12 months"
             )
         
         with col2:
+            prev_month_str = prev_month.strftime('%b %Y')
+            current_month_str = current_month.strftime('%b %Y')
             st.metric(
-                label="📊 Current Month",
-                value=f"{current_month_credits:,.2f}",
-                delta=f"{mom_change:+.1f}%" if mom_change != 0 else None,
-                help=f"Serverless credits for {current_month}"
-            )
-        
-        with col3:
-            st.metric(
-                label="🔄 Task Executions",
-                value=f"{total_task_executions:,}",
-                help="Total serverless task executions"
-            )
-        
-        with col4:
-            st.metric(
-                label="📋 Unique Tasks",
-                value=f"{unique_tasks}",
-                help="Number of unique serverless tasks"
-            )
-        
-        # Additional metrics row
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            avg_credits_per_execution = total_serverless_credits / total_task_executions if total_task_executions > 0 else 0
-            st.metric(
-                label="📈 Avg Credits/Execution",
-                value=f"{avg_credits_per_execution:.4f}",
-                help="Average credits per task execution"
-            )
-        
-        with col2:
-            st.metric(
-                label="⏱️ Avg Duration",
-                value=f"{avg_duration:.1f} min",
-                help="Average task execution duration"
-            )
-        
-        with col3:
-            avg_daily_credits = data.groupby(data['START_TIME'].dt.date)['CREDITS_USED'].sum().mean()
-            st.metric(
-                label="📅 Daily Average",
-                value=f"{avg_daily_credits:.2f}",
-                help="Average daily serverless credits"
-            )
-        
-        with col4:
-            # Find peak day
-            daily_consumption = data.groupby(data['START_TIME'].dt.date)['CREDITS_USED'].sum()
-            peak_daily = daily_consumption.max()
-            st.metric(
-                label="📊 Peak Daily Usage",
-                value=f"{peak_daily:.2f}",
-                help="Highest single-day serverless credits"
+                label=f"Current Month ({current_month_str})",
+                value=format_credits_with_dollars(current_month_credits),
+                delta=f"{mom_change:+.1f}% vs {prev_month_str}" if mom_change != 0 else None,
+                help=f"Change from {prev_month_str} to {current_month_str}"
             )
     
     def render_serverless_charts(self, data: pd.DataFrame) -> None:
@@ -3621,23 +3522,17 @@ class ServerlessAnalyzer(ServiceAnalyzer):
         data['START_TIME'] = pd.to_datetime(data['START_TIME'])
         
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 Trends", "📋 By Task", "⏱️ Performance", "💡 Optimization"])
+        tab1, tab2 = st.tabs(["Trends", "By Task"])
         
         with tab1:
             self.render_serverless_trends_chart(data)
         
         with tab2:
             self.render_task_serverless_chart(data)
-        
-        with tab3:
-            self.render_serverless_performance_analysis(data)
-            
-        with tab4:
-            self.render_serverless_optimization(data)
     
     def render_serverless_trends_chart(self, data: pd.DataFrame) -> None:
         """Render serverless trends over time."""
-        st.markdown("#### 📈 Serverless Usage Trends")
+        st.markdown("#### Serverless Usage Trends")
         
         # Daily aggregation
         daily_data = data.groupby(data['START_TIME'].dt.date).agg({
@@ -3661,7 +3556,7 @@ class ServerlessAnalyzer(ServiceAnalyzer):
             )
             fig_credits.update_traces(line=dict(color='#2ca02c', width=3))
             fig_credits.update_layout(height=400)
-            st.plotly_chart(fig_credits, use_container_width=True)
+            render_plotly_chart(fig_credits)
         
         with col2:
             # Daily executions
@@ -3674,26 +3569,13 @@ class ServerlessAnalyzer(ServiceAnalyzer):
             )
             fig_executions.update_traces(line=dict(color='#d62728', width=3))
             fig_executions.update_layout(height=400)
-            st.plotly_chart(fig_executions, use_container_width=True)
+            render_plotly_chart(fig_executions)
         
-        # Credits per execution efficiency over time
-        daily_data['CREDITS_PER_EXECUTION'] = daily_data['CREDITS_USED'] / daily_data['EXECUTIONS']
-        daily_data['CREDITS_PER_EXECUTION'] = daily_data['CREDITS_PER_EXECUTION'].replace([float('inf'), -float('inf')], 0)
-        
-        fig_efficiency = px.line(
-            daily_data,
-            x='START_TIME',
-            y='CREDITS_PER_EXECUTION',
-            title='Serverless Efficiency Over Time (Credits per Execution)',
-            labels={'START_TIME': 'Date', 'CREDITS_PER_EXECUTION': 'Credits per Execution'}
-        )
-        fig_efficiency.update_traces(line=dict(color='#ff7f0e', width=2))
-        fig_efficiency.update_layout(height=400)
-        st.plotly_chart(fig_efficiency, use_container_width=True)
+
     
     def render_task_serverless_chart(self, data: pd.DataFrame) -> None:
         """Render serverless breakdown by task."""
-        st.markdown("#### 📋 Serverless by Task")
+        st.markdown("#### Serverless by Task")
         
         # Aggregate by task
         task_data = data.groupby('FULL_TASK_NAME').agg({
@@ -3718,7 +3600,7 @@ class ServerlessAnalyzer(ServiceAnalyzer):
                 labels={'CREDITS_USED': 'Credits Used', 'FULL_TASK_NAME': 'Task'}
             )
             fig_bar.update_layout(height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            render_plotly_chart(fig_bar)
         
         with col2:
             # Credits distribution pie chart
@@ -3729,21 +3611,25 @@ class ServerlessAnalyzer(ServiceAnalyzer):
                 title='Credit Distribution by Task (Top 8)'
             )
             fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
+            render_plotly_chart(fig_pie)
         
         # Detailed task breakdown
-        st.markdown("#### 📋 Task Execution Details")
+        st.markdown("#### Task Execution Details")
         
+        credit_price = st.session_state.get('credit_price', 3.0)
         display_data = task_data.copy()
+        display_data['COST'] = display_data['CREDITS_USED'] * credit_price
+        display_data['COST_FORMATTED'] = display_data['COST'].apply(lambda x: f"${x:,.2f}")
         display_data['CREDITS_FORMATTED'] = display_data['CREDITS_USED'].apply(lambda x: f"{x:,.4f}")
         display_data['DURATION_FORMATTED'] = display_data['DURATION_MINUTES'].apply(lambda x: f"{x:.1f} min")
         display_data['CREDITS_PER_EXEC_FORMATTED'] = display_data['CREDITS_PER_EXECUTION'].apply(lambda x: f"{x:,.6f}")
         
         st.dataframe(
-            display_data[['FULL_TASK_NAME', 'CREDITS_FORMATTED', 'EXECUTION_COUNT', 
+            display_data[['FULL_TASK_NAME', 'COST_FORMATTED', 'CREDITS_FORMATTED', 'EXECUTION_COUNT', 
                          'DURATION_FORMATTED', 'CREDITS_PER_EXEC_FORMATTED']],
             column_config={
                 'FULL_TASK_NAME': 'Task Name',
+                'COST_FORMATTED': 'Total Cost',
                 'CREDITS_FORMATTED': 'Total Credits',
                 'EXECUTION_COUNT': 'Executions',
                 'DURATION_FORMATTED': 'Avg Duration',
@@ -3755,13 +3641,13 @@ class ServerlessAnalyzer(ServiceAnalyzer):
     
     def render_serverless_performance_analysis(self, data: pd.DataFrame) -> None:
         """Render serverless performance analysis."""
-        st.markdown("#### ⏱️ Serverless Performance Analysis")
+        st.markdown("#### ⏱Serverless Performance Analysis")
         
         col1, col2 = st.columns(2)
         
         with col1:
             # Replace problematic scatter plot with summary metrics
-            st.markdown("#### 📊 Performance Summary")
+            st.markdown("#### Performance Summary")
             
             # Calculate summary statistics
             avg_duration = data['DURATION_MINUTES'].mean()
@@ -3779,7 +3665,7 @@ class ServerlessAnalyzer(ServiceAnalyzer):
                 st.metric("Max Credits", f"{max_credits:.4f}")
             
             # Show top 5 longest running tasks
-            st.markdown("**🕐 Longest Running Tasks:**")
+            st.markdown("**Longest Running Tasks:**")
             top_duration = data.nlargest(5, 'DURATION_MINUTES')[['TASK_NAME', 'DURATION_MINUTES', 'CREDITS_USED']]
             for _, row in top_duration.iterrows():
                 st.write(f"• {row['TASK_NAME']}: {row['DURATION_MINUTES']:.1f} min ({row['CREDITS_USED']:.4f} credits)")
@@ -3798,7 +3684,7 @@ class ServerlessAnalyzer(ServiceAnalyzer):
             render_plotly_chart(fig_duration)
         
         # Performance efficiency analysis
-        st.markdown("#### ⚡ Performance Efficiency Analysis")
+        st.markdown("#### Performance Efficiency Analysis")
         
         col1, col2 = st.columns(2)
         
@@ -3837,7 +3723,7 @@ class ServerlessAnalyzer(ServiceAnalyzer):
     
     def render_serverless_optimization(self, data: pd.DataFrame) -> None:
         """Render serverless optimization recommendations."""
-        st.markdown("#### 💡 Serverless Optimization")
+        st.markdown("#### Serverless Optimization")
         
         # Calculate optimization metrics
         task_data = data.groupby('FULL_TASK_NAME').agg({
@@ -3864,7 +3750,7 @@ class ServerlessAnalyzer(ServiceAnalyzer):
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("**🔍 Analysis Results:**")
+            st.markdown("**Analysis Results:**")
             
             total_credits = data['CREDITS_USED'].sum()
             total_executions = len(data)
@@ -3885,7 +3771,7 @@ class ServerlessAnalyzer(ServiceAnalyzer):
                 st.write("  - Above 75th percentile for execution count")
         
         with col2:
-            st.markdown("**🎯 Optimization Recommendations:**")
+            st.markdown("**Optimization Recommendations:**")
             
             if len(inefficient_tasks) > 0:
                 st.write("• **High Credits per Minute Tasks**:")
@@ -3939,8 +3825,6 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
         Main entry point for rendering client consumption analysis.
         Simplified version focusing on client application consumption patterns.
         """
-        st.markdown(f"### 🔌 Consumption by Client Analysis")
-        st.markdown(f"Client application consumption analysis showing credits used by different tools, applications, and connection types.")
         
         # Check connection
         if not self.data_manager or not self.data_manager.session:
@@ -3952,8 +3836,8 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
         
         # Handle empty result sets with appropriate messaging
         if client_data is None or client_data.empty:
-            st.warning("📊 No client consumption data found")
-            with st.expander("💡 **Possible Reasons & Solutions**"):
+            st.warning("No client consumption data found")
+            with st.expander("**Possible Reasons & Solutions**"):
                 st.markdown("""
                 **Why might client consumption data be empty?**
                 
@@ -3977,7 +3861,6 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
             return
         
         # Render client consumption analysis
-        self.render_client_metrics(client_data)
         self.render_client_charts(client_data)
     
     def get_service_data(self, view_type: ViewType) -> Optional[pd.DataFrame]:
@@ -4103,36 +3986,36 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
         else:
             mom_change = 0
         
-        st.markdown("#### 🔌 Client Consumption Overview")
+        st.markdown("#### Client Consumption Overview")
         
         # Display metrics in columns
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.metric(
-                label="🔌 Total Client Credits",
-                value=f"{total_client_credits:,.2f}",
+                label="Total Client Credits",
+                value=format_credits_with_dollars(total_client_credits),
                 help="Total credits used by all client applications"
             )
         
         with col2:
             st.metric(
-                label="📊 Current Month",
-                value=f"{current_month_credits:,.2f}",
+                label="Current Month",
+                value=format_credits_with_dollars(current_month_credits),
                 delta=f"{mom_change:+.1f}%" if mom_change != 0 else None,
                 help=f"Client consumption for {current_month}"
             )
         
         with col3:
             st.metric(
-                label="🔍 Total Queries",
+                label="Total Queries",
                 value=f"{total_queries:,}",
                 help="Total queries executed by client applications"
             )
         
         with col4:
             st.metric(
-                label="🛠️ Client Applications",
+                label="Client Applications",
                 value=f"{unique_clients}",
                 help="Number of different client application types"
             )
@@ -4143,14 +4026,14 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
         with col1:
             avg_credits_per_query = total_client_credits / total_queries if total_queries > 0 else 0
             st.metric(
-                label="📈 Avg Credits/Query",
-                value=f"{avg_credits_per_query:.4f}",
+                label="Avg Credits/Query",
+                value=format_credits_with_dollars(avg_credits_per_query),
                 help="Average credits per query across all clients"
             )
         
         with col2:
             st.metric(
-                label="👥 Active Users",
+                label="Active Users",
                 value=f"{unique_users}",
                 help="Number of users executing queries via clients"
             )
@@ -4158,8 +4041,8 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
         with col3:
             avg_daily_credits = data.groupby(data['START_TIME'].dt.date)['CREDITS_USED_CLOUD_SERVICES'].sum().mean()
             st.metric(
-                label="📅 Daily Average",
-                value=f"{avg_daily_credits:.2f}",
+                label="Daily Average",
+                value=format_credits_with_dollars(avg_daily_credits),
                 help="Average daily client consumption"
             )
         
@@ -4168,8 +4051,8 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
             daily_consumption = data.groupby(data['START_TIME'].dt.date)['CREDITS_USED_CLOUD_SERVICES'].sum()
             peak_daily = daily_consumption.max()
             st.metric(
-                label="📊 Peak Daily Usage",
-                value=f"{peak_daily:.2f}",
+                label="Peak Daily Usage",
+                value=format_credits_with_dollars(peak_daily),
                 help="Highest single-day client consumption"
             )
     
@@ -4187,24 +4070,12 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
         data = data.copy()
         data['START_TIME'] = pd.to_datetime(data['START_TIME'])
         
-        # Create tabs for different analyses
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 Trends", "🛠️ By Client", "👥 By User", "💡 Optimization"])
-        
-        with tab1:
-            self.render_client_trends_chart(data)
-        
-        with tab2:
-            self.render_client_breakdown_chart(data)
-        
-        with tab3:
-            self.render_user_client_analysis(data)
-            
-        with tab4:
-            self.render_client_optimization(data)
+        # Render client breakdown directly (no tabs)
+        self.render_client_breakdown_chart(data)
     
     def render_client_trends_chart(self, data: pd.DataFrame) -> None:
         """Render client consumption trends over time."""
-        st.markdown("#### 📈 Client Consumption Trends")
+        st.markdown("#### Client Consumption Trends")
         
         # Daily aggregation
         daily_data = data.groupby(data['START_TIME'].dt.date).agg({
@@ -4259,7 +4130,13 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
     
     def render_client_breakdown_chart(self, data: pd.DataFrame) -> None:
         """Render client consumption breakdown by application."""
-        st.markdown("#### 🛠️ Consumption by Client Application")
+        # Add time range subtitle
+        if not data.empty and 'START_TIME' in data.columns:
+            min_date = data['START_TIME'].min()
+            max_date = data['START_TIME'].max()
+            st.caption(f"Data from {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}")
+        
+
         
         # Aggregate by client application
         client_data = data.groupby('CLIENT_APPLICATION_NAME').agg({
@@ -4297,19 +4174,23 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
             fig_pie.update_traces(textposition='inside', textinfo='percent+label')
             render_plotly_chart(fig_pie)
         
-        # Detailed client breakdown
-        st.markdown("#### 📋 Client Application Details")
+        # Detailed client breakdown with total cost
+        st.markdown("#### Client Application Details")
         
+        credit_price = st.session_state.get('credit_price', 2.00)
         display_data = client_data.copy()
+        display_data['TOTAL_COST'] = display_data['CREDITS_USED_CLOUD_SERVICES'] * credit_price
         display_data['CREDITS_FORMATTED'] = display_data['CREDITS_USED_CLOUD_SERVICES'].apply(lambda x: f"{x:,.4f}")
+        display_data['COST_FORMATTED'] = display_data['TOTAL_COST'].apply(lambda x: f"${x:,.2f}")
         display_data['CREDITS_PER_QUERY_FORMATTED'] = display_data['CREDITS_PER_QUERY'].apply(lambda x: f"{x:,.6f}")
         
         st.dataframe(
-            display_data[['CLIENT_APPLICATION_NAME', 'CREDITS_FORMATTED', 'QUERY_COUNT', 
+            display_data[['CLIENT_APPLICATION_NAME', 'CREDITS_FORMATTED', 'COST_FORMATTED', 'QUERY_COUNT', 
                          'USER_COUNT', 'CREDITS_PER_QUERY_FORMATTED']],
             column_config={
                 'CLIENT_APPLICATION_NAME': 'Client Application',
                 'CREDITS_FORMATTED': 'Total Credits',
+                'COST_FORMATTED': 'Total Cost',
                 'QUERY_COUNT': 'Query Count',
                 'USER_COUNT': 'Users',
                 'CREDITS_PER_QUERY_FORMATTED': 'Credits per Query'
@@ -4320,7 +4201,7 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
     
     def render_user_client_analysis(self, data: pd.DataFrame) -> None:
         """Render user-client consumption analysis."""
-        st.markdown("#### 👥 User and Client Analysis")
+        st.markdown("#### User and Client Analysis")
         
         # User-client combination analysis
         user_client_data = data.groupby(['USER_NAME', 'CLIENT_APPLICATION_NAME']).agg({
@@ -4361,7 +4242,7 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
     
     def render_client_optimization(self, data: pd.DataFrame) -> None:
         """Render client consumption optimization recommendations."""
-        st.markdown("#### 💡 Client Optimization")
+        st.markdown("#### Client Optimization")
         
         # Calculate optimization metrics
         client_data = data.groupby('CLIENT_APPLICATION_NAME').agg({
@@ -4384,7 +4265,7 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("**🔍 Analysis Results:**")
+            st.markdown("**Analysis Results:**")
             
             total_credits = data['CREDITS_USED_CLOUD_SERVICES'].sum()
             total_queries = len(data)
@@ -4401,7 +4282,7 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
                 st.write("  - Above 75th percentile for total credits")
         
         with col2:
-            st.markdown("**🎯 Optimization Recommendations:**")
+            st.markdown("**Optimization Recommendations:**")
             
             if len(inefficient_clients) > 0:
                 st.write("• **High Credits per Query Clients**:")
@@ -4478,8 +4359,6 @@ class AIServicesAnalyzer:
         Each section is independent to prevent duplicate credit counting.
         Sections with no data will display informative messages.
         """
-        st.markdown("### 🤖 AI Services Analysis")
-        st.markdown("Comprehensive analysis of Snowflake AI services usage and costs.")
         
         # Track if any data exists
         has_any_data = False
@@ -4492,15 +4371,31 @@ class AIServicesAnalyzer:
         else:
             self._handle_no_data("Account-Level AI Services")
         
-        # 2. Cortex Functions
+        # 2. Snowflake Intelligence
+        si_data = self._get_snowflake_intelligence_data()
+        if si_data is not None and not si_data.empty:
+            self._render_snowflake_intelligence_section(si_data)
+            has_any_data = True
+        else:
+            self._handle_no_data("Snowflake Intelligence")
+        
+        # 3. Cortex Agents
+        agent_data = self._get_cortex_agents_data()
+        if agent_data is not None and not agent_data.empty:
+            self._render_cortex_agents_section(agent_data)
+            has_any_data = True
+        else:
+            self._handle_no_data("Cortex Agents")
+        
+        # 4. Cortex Functions
         functions_data = self._get_cortex_functions_data()
         if functions_data is not None and not functions_data.empty:
             self._render_cortex_functions_section(functions_data)
             has_any_data = True
         else:
-            self._handle_no_data("Cortex Functions")
+            self._handle_no_data("AI Functions")
         
-        # 3. Cortex Analyst
+        # 5. Cortex Analyst
         analyst_data = self._get_cortex_analyst_data()
         if analyst_data is not None and not analyst_data.empty:
             self._render_cortex_analyst_section(analyst_data)
@@ -4508,7 +4403,7 @@ class AIServicesAnalyzer:
         else:
             self._handle_no_data("Cortex Analyst")
         
-        # 4. Cortex Search
+        # 6. Cortex Search
         search_data = self._get_cortex_search_data()
         if search_data is not None and not search_data.empty:
             self._render_cortex_search_section(search_data)
@@ -4516,15 +4411,7 @@ class AIServicesAnalyzer:
         else:
             self._handle_no_data("Cortex Search")
         
-        # 5. Document AI
-        document_data = self._get_document_ai_data()
-        if document_data is not None and not document_data.empty:
-            self._render_document_ai_section(document_data)
-            has_any_data = True
-        else:
-            self._handle_no_data("Document AI")
-        
-        # 6. Fine-Tuning
+        # 7. Fine-Tuning
         tuning_data = self._get_fine_tuning_data()
         if tuning_data is not None and not tuning_data.empty:
             self._render_fine_tuning_section(tuning_data)
@@ -4532,11 +4419,19 @@ class AIServicesAnalyzer:
         else:
             self._handle_no_data("Fine-Tuning")
         
+        # 8. Cortex REST API
+        rest_api_data = self._get_cortex_rest_api_data()
+        if rest_api_data is not None and not rest_api_data.empty:
+            self._render_cortex_rest_api_section(rest_api_data)
+            has_any_data = True
+        else:
+            self._handle_no_data("Cortex REST API")
+        
         # Display guidance if no AI services have any data
         if not has_any_data:
             st.markdown("---")
             st.info("""
-                💡 **No AI Services usage detected**
+                **No AI Services usage detected**
                 
                 This could mean:
                 - AI Services have not been used in the last 12 months
@@ -4618,7 +4513,7 @@ class AIServicesAnalyzer:
         """
         # Section header
         st.markdown("---")
-        st.markdown("#### 📊 Account-Level AI Services")
+        st.markdown("#### Account-Level AI Services")
         
         # Display date range
         if not data.empty and 'USAGE_DATE' in data.columns:
@@ -4669,27 +4564,227 @@ class AIServicesAnalyzer:
             margin=dict(l=0, r=0, t=30, b=0)
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        render_plotly_chart(fig)
+    
+    def _get_snowflake_intelligence_data(self) -> Optional[pd.DataFrame]:
+        """
+        Retrieve Snowflake Intelligence usage data from SNOWFLAKE_INTELLIGENCE_USAGE_HISTORY.
+        """
+        query = """
+        SELECT 
+            START_TIME,
+            END_TIME,
+            USER_NAME,
+            REQUEST_ID,
+            SNOWFLAKE_INTELLIGENCE_NAME,
+            AGENT_NAME,
+            TOKEN_CREDITS,
+            TOKENS
+        FROM SNOWFLAKE.ACCOUNT_USAGE.SNOWFLAKE_INTELLIGENCE_USAGE_HISTORY
+        WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
+        ORDER BY START_TIME DESC
+        """
+        try:
+            result = self.data_manager.execute_query(query)
+            if result is not None and not result.empty:
+                if 'START_TIME' in result.columns:
+                    result['START_TIME'] = pd.to_datetime(result['START_TIME']).dt.tz_localize(None)
+            return result
+        except Exception as e:
+            return None
+    
+    def _render_snowflake_intelligence_section(self, data: pd.DataFrame) -> None:
+        """
+        Render Snowflake Intelligence section with metrics, charts, and data table.
+        """
+        st.markdown("---")
+        st.markdown("#### Snowflake Intelligence")
+        st.caption(
+            "ⓘ Pricing: Billed in credits based on token usage. Includes Cortex Analyst calls "
+            "via Snowflake Intelligence. See Credit Consumption Table 6(f) for rates."
+        )
         
-        # Data table
-        st.markdown("##### Daily Usage Details")
+        if not data.empty and 'START_TIME' in data.columns:
+            min_date = data['START_TIME'].min()
+            max_date = data['START_TIME'].max()
+            st.caption(f"Data from {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}")
         
-        # Prepare table data
-        table_data = data.copy()
-        table_data['USAGE_DATE'] = table_data['USAGE_DATE'].dt.strftime('%Y-%m-%d')
-        table_data['CREDITS_USED'] = table_data['CREDITS_USED'].apply(self._format_credits)
-        table_data = table_data.rename(columns={
-            'USAGE_DATE': 'Usage Date',
-            'CREDITS_USED': 'Credits Used'
-        })
+        credit_price = st.session_state.get('credit_price', 2.00)
         
-        # Display only relevant columns
-        display_cols = ['Usage Date', 'Credits Used']
+        total_credits = data['TOKEN_CREDITS'].sum()
+        total_cost = total_credits * credit_price
+        total_tokens = data['TOKENS'].sum()
+        request_count = len(data)
+        unique_users = data['USER_NAME'].nunique()
+        unique_agents = data['AGENT_NAME'].nunique()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Credits", f"{total_credits:,.2f}")
+        with col2:
+            st.metric("Total Cost", f"${total_cost:,.2f}")
+        with col3:
+            st.metric("Requests", f"{request_count:,}")
+        with col4:
+            st.metric("Unique Agents", f"{unique_agents}")
+        
+        agent_agg = data.groupby('AGENT_NAME').agg({
+            'TOKEN_CREDITS': 'sum',
+            'TOKENS': 'sum',
+            'REQUEST_ID': 'count'
+        }).reset_index()
+        agent_agg.columns = ['Agent', 'Credits', 'Tokens', 'Requests']
+        agent_agg['Cost'] = agent_agg['Credits'] * credit_price
+        agent_agg = agent_agg.sort_values('Cost', ascending=True)
+        agent_agg['Agent'] = agent_agg['Agent'].fillna('Unknown')
+        agent_agg.loc[agent_agg['Agent'] == '', 'Agent'] = 'Unknown'
+        
+        st.markdown("##### Cost by Agent")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=agent_agg['Agent'],
+            x=agent_agg['Cost'],
+            orientation='h',
+            marker=dict(color='#9467bd'),
+            text=[f"${v:,.2f}" for v in agent_agg['Cost']],
+            textposition='auto'
+        ))
+        
+        fig.update_layout(
+            xaxis_title="Cost ($)",
+            yaxis_title="Agent",
+            height=max(300, len(agent_agg) * 40),
+            showlegend=False,
+            margin=dict(l=0, r=0, t=10, b=0)
+        )
+        
+        render_plotly_chart(fig)
+        
+        st.markdown("##### Usage Details")
+        display_df = agent_agg.copy()
+        display_df = display_df.sort_values('Cost', ascending=False)
+        display_df['Tokens'] = display_df['Tokens'].apply(lambda x: f"{x:,.0f}")
+        display_df['Credits'] = display_df['Credits'].apply(lambda x: f"{x:,.4f}")
+        display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
+        display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
+        
         st.dataframe(
-            table_data[display_cols],
+            display_df[['Agent', 'Requests', 'Tokens', 'Credits', 'Cost']],
             use_container_width=True,
             hide_index=True,
-            height=400
+            height=min(400, len(display_df) * 35 + 50)
+        )
+    
+    def _get_cortex_agents_data(self) -> Optional[pd.DataFrame]:
+        """
+        Retrieve Cortex Agents usage data from CORTEX_AGENT_USAGE_HISTORY.
+        """
+        query = """
+        SELECT 
+            START_TIME,
+            END_TIME,
+            USER_NAME,
+            REQUEST_ID,
+            AGENT_DATABASE_NAME,
+            AGENT_SCHEMA_NAME,
+            AGENT_NAME,
+            TOKEN_CREDITS,
+            TOKENS
+        FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_AGENT_USAGE_HISTORY
+        WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
+        ORDER BY START_TIME DESC
+        """
+        try:
+            result = self.data_manager.execute_query(query)
+            if result is not None and not result.empty:
+                if 'START_TIME' in result.columns:
+                    result['START_TIME'] = pd.to_datetime(result['START_TIME']).dt.tz_localize(None)
+            return result
+        except Exception as e:
+            return None
+    
+    def _render_cortex_agents_section(self, data: pd.DataFrame) -> None:
+        """
+        Render Cortex Agents section with metrics, charts, and data table.
+        """
+        st.markdown("---")
+        st.markdown("#### Cortex Agents")
+        st.caption(
+            "ⓘ Pricing: Billed in credits based on token usage. Includes orchestration and tool calls "
+            "(e.g., Cortex Analyst, Cortex Search). See Credit Consumption Table 6(e) for rates."
+        )
+        
+        if not data.empty and 'START_TIME' in data.columns:
+            min_date = data['START_TIME'].min()
+            max_date = data['START_TIME'].max()
+            st.caption(f"Data from {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}")
+        
+        credit_price = st.session_state.get('credit_price', 2.00)
+        
+        total_credits = data['TOKEN_CREDITS'].sum()
+        total_cost = total_credits * credit_price
+        total_tokens = data['TOKENS'].sum()
+        request_count = len(data)
+        unique_users = data['USER_NAME'].nunique()
+        unique_agents = data['AGENT_NAME'].nunique()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Credits", f"{total_credits:,.2f}")
+        with col2:
+            st.metric("Total Cost", f"${total_cost:,.2f}")
+        with col3:
+            st.metric("Requests", f"{request_count:,}")
+        with col4:
+            st.metric("Unique Agents", f"{unique_agents}")
+        
+        data = data.copy()
+        data['AGENT_NAME'] = data['AGENT_NAME'].fillna('Unknown')
+        data.loc[data['AGENT_NAME'] == '', 'AGENT_NAME'] = 'Unknown'
+        
+        agent_agg = data.groupby('AGENT_NAME').agg({
+            'TOKEN_CREDITS': 'sum',
+            'TOKENS': 'sum',
+            'REQUEST_ID': 'count'
+        }).reset_index()
+        agent_agg.columns = ['Agent', 'Credits', 'Tokens', 'Requests']
+        agent_agg['Cost'] = agent_agg['Credits'] * credit_price
+        agent_agg = agent_agg.sort_values('Cost', ascending=True)
+        
+        st.markdown("##### Cost by Agent")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=agent_agg['Agent'],
+            x=agent_agg['Cost'],
+            orientation='h',
+            marker=dict(color='#2ca02c'),
+            text=[f"${v:,.2f}" for v in agent_agg['Cost']],
+            textposition='auto'
+        ))
+        
+        fig.update_layout(
+            xaxis_title="Cost ($)",
+            yaxis_title="Agent",
+            height=max(300, len(agent_agg) * 40),
+            showlegend=False,
+            margin=dict(l=0, r=0, t=10, b=0)
+        )
+        
+        render_plotly_chart(fig)
+        
+        st.markdown("##### Usage Details")
+        display_df = agent_agg.copy()
+        display_df = display_df.sort_values('Cost', ascending=False)
+        display_df['Tokens'] = display_df['Tokens'].apply(lambda x: f"{x:,.0f}")
+        display_df['Credits'] = display_df['Credits'].apply(lambda x: f"{x:,.4f}")
+        display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
+        display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
+        
+        st.dataframe(
+            display_df[['Agent', 'Requests', 'Tokens', 'Credits', 'Cost']],
+            use_container_width=True,
+            hide_index=True,
+            height=min(400, len(display_df) * 35 + 50)
         )
     
     def _get_cortex_functions_data(self) -> Optional[pd.DataFrame]:
@@ -4769,7 +4864,7 @@ class AIServicesAnalyzer:
         """
         # Section header
         st.markdown("---")
-        st.markdown("#### 🔧 Cortex Functions")
+        st.markdown("#### AI Functions")
         
         # Display date range
         if not data.empty and 'START_TIME' in data.columns:
@@ -4788,8 +4883,10 @@ class AIServicesAnalyzer:
         with col2:
             st.metric("Unique Functions", f"{unique_functions}")
         
-        # Aggregate by function name
-        function_agg = data.groupby('FUNCTION_NAME').agg({
+        # Aggregate by function name and clean up quotes
+        func_data = data.copy()
+        func_data['FUNCTION_NAME'] = func_data['FUNCTION_NAME'].astype(str).str.replace('"', '')
+        function_agg = func_data.groupby('FUNCTION_NAME').agg({
             'TOKEN_CREDITS': 'sum'
         }).reset_index().sort_values('TOKEN_CREDITS', ascending=True)
         
@@ -4811,10 +4908,17 @@ class AIServicesAnalyzer:
             margin=dict(l=0, r=0, t=10, b=0)
         )
         
-        st.plotly_chart(fig_func, use_container_width=True)
+        render_plotly_chart(fig_func)
         
-        # Aggregate by model name
-        model_agg = data.groupby('MODEL_NAME').agg({
+        # Aggregate by model name - replace nulls/empty with "Various AI Functions"
+        model_data = data.copy()
+        model_data['MODEL_NAME'] = model_data['MODEL_NAME'].fillna('Various AI Functions')
+        # Clean up quotes first, then check for empty
+        model_data['MODEL_NAME'] = model_data['MODEL_NAME'].astype(str).str.replace('"', '')
+        model_data.loc[model_data['MODEL_NAME'].str.strip() == '', 'MODEL_NAME'] = 'Various AI Functions'
+        model_data.loc[model_data['MODEL_NAME'] == 'None', 'MODEL_NAME'] = 'Various AI Functions'
+        
+        model_agg = model_data.groupby('MODEL_NAME').agg({
             'TOKEN_CREDITS': 'sum'
         }).reset_index().sort_values('TOKEN_CREDITS', ascending=True)
         
@@ -4836,13 +4940,20 @@ class AIServicesAnalyzer:
             margin=dict(l=0, r=0, t=10, b=0)
         )
         
-        st.plotly_chart(fig_model, use_container_width=True)
+        render_plotly_chart(fig_model)
         
         # Data table - Aggregated by Function and Model
         st.markdown("##### Function Usage Details")
         
+        # Clean up quotes in data for table
+        table_data = data.copy()
+        table_data['FUNCTION_NAME'] = table_data['FUNCTION_NAME'].astype(str).str.replace('"', '')
+        table_data['MODEL_NAME'] = table_data['MODEL_NAME'].fillna('Various AI Functions')
+        table_data['MODEL_NAME'] = table_data['MODEL_NAME'].astype(str).str.replace('"', '')
+        table_data.loc[table_data['MODEL_NAME'].str.strip() == '', 'MODEL_NAME'] = 'Various AI Functions'
+        
         # Aggregate for table
-        table_agg = data.groupby(['FUNCTION_NAME', 'MODEL_NAME']).agg({
+        table_agg = table_data.groupby(['FUNCTION_NAME', 'MODEL_NAME']).agg({
             'TOKEN_CREDITS': 'sum',
             'START_TIME': ['min', 'max']
         }).reset_index()
@@ -4857,7 +4968,7 @@ class AIServicesAnalyzer:
         table_agg['Date Range'] = table_agg['First Usage'] + ' to ' + table_agg['Last Usage']
         
         # Add usage count
-        usage_counts = data.groupby(['FUNCTION_NAME', 'MODEL_NAME']).size().reset_index(name='Usage Count')
+        usage_counts = table_data.groupby(['FUNCTION_NAME', 'MODEL_NAME']).size().reset_index(name='Usage Count')
         table_agg = table_agg.merge(
             usage_counts,
             left_on=['Function Name', 'Model Name'],
@@ -4953,7 +5064,7 @@ class AIServicesAnalyzer:
         """
         # Section header
         st.markdown("---")
-        st.markdown("#### 🤖 Cortex Analyst")
+        st.markdown("#### Cortex Analyst")
         
         # Display date range
         if not data.empty and 'START_TIME' in data.columns:
@@ -4996,7 +5107,7 @@ class AIServicesAnalyzer:
             margin=dict(l=0, r=0, t=10, b=0)
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        render_plotly_chart(fig)
         
         # Data table - Aggregated by Username
         st.markdown("##### Analyst Usage Details")
@@ -5104,7 +5215,7 @@ class AIServicesAnalyzer:
         """
         # Section header
         st.markdown("---")
-        st.markdown("#### 🔍 Cortex Search")
+        st.markdown("#### Cortex Search")
         
         # Display date range
         if not data.empty and 'USAGE_DATE' in data.columns:
@@ -5146,7 +5257,7 @@ class AIServicesAnalyzer:
             margin=dict(l=0, r=0, t=10, b=0)
         )
         
-        st.plotly_chart(fig_service, use_container_width=True)
+        render_plotly_chart(fig_service)
         
         # Aggregate by consumption type
         type_agg = data.groupby('CONSUMPTION_TYPE').agg({
@@ -5171,7 +5282,7 @@ class AIServicesAnalyzer:
             margin=dict(l=0, r=0, t=10, b=0)
         )
         
-        st.plotly_chart(fig_type, use_container_width=True)
+        render_plotly_chart(fig_type)
         
         # Data table - Aggregated by Database, Schema, Service, and Type
         st.markdown("##### Search Usage Details")
@@ -5333,7 +5444,7 @@ class AIServicesAnalyzer:
             margin=dict(l=0, r=0, t=10, b=0)
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        render_plotly_chart(fig)
         
         # Data table - Aggregated by Operation
         st.markdown("##### Document AI Usage Details")
@@ -5441,7 +5552,7 @@ class AIServicesAnalyzer:
         """
         # Section header
         st.markdown("---")
-        st.markdown("#### 🎯 Fine-Tuning")
+        st.markdown("#### Fine-Tuning")
         
         # Display date range
         if not data.empty and 'START_TIME' in data.columns:
@@ -5483,7 +5594,7 @@ class AIServicesAnalyzer:
             margin=dict(l=0, r=0, t=10, b=0)
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        render_plotly_chart(fig)
         
         # Data table - Aggregated by Model
         st.markdown("##### Fine-Tuning Usage Details")
@@ -5521,19 +5632,182 @@ class AIServicesAnalyzer:
             height=400
         )
     
+    def _get_cortex_rest_api_data(self) -> Optional[pd.DataFrame]:
+        """
+        Retrieve Cortex REST API usage data from CORTEX_REST_API_USAGE_HISTORY.
+        
+        The Cortex REST API is billed based on tokens per model, with pricing
+        varying by model size. Pricing is in credits per million tokens.
+        
+        Returns:
+            Optional[pd.DataFrame]: DataFrame with REST API usage data,
+                                   or None if query fails or no data exists
+        """
+        query = """
+        SELECT 
+            START_TIME,
+            END_TIME,
+            REQUEST_ID,
+            MODEL_NAME,
+            TOKENS,
+            USER_ID,
+            INFERENCE_REGION
+        FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_REST_API_USAGE_HISTORY
+        WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
+        ORDER BY START_TIME DESC
+        """
+        try:
+            result = self.data_manager.execute_query(query)
+            return result
+        except Exception as e:
+            return None
+    
+    def _render_cortex_rest_api_section(self, data: pd.DataFrame) -> None:
+        """
+        Render Cortex REST API section with metrics, charts, and data table.
+        
+        The REST API is priced per million tokens with different rates per model.
+        Pricing reference: Snowflake Credit Consumption Table 6(b).
+        
+        Args:
+            data: DataFrame with columns MODEL_NAME, TOKENS, START_TIME, etc.
+        """
+        MODEL_PRICING = {
+            'mistral-7b': 0.12,
+            'gemma-7b': 0.12,
+            'llama3-8b': 0.19,
+            'llama3.1-8b': 0.19,
+            'llama3.2-1b': 0.05,
+            'llama3.2-3b': 0.07,
+            'mixtral-8x7b': 0.22,
+            'llama2-70b-chat': 0.45,
+            'llama3-70b': 0.85,
+            'llama3.1-70b': 1.21,
+            'llama3.3-70b': 1.21,
+            'mistral-large': 1.80,
+            'mistral-large2': 1.21,
+            'reka-flash': 0.45,
+            'reka-core': 3.0,
+            'jamba-instruct': 0.33,
+            'jamba-1.5-mini': 0.07,
+            'jamba-1.5-large': 0.45,
+            'llama-3.1-405b': 3.0,
+            'snowflake-arctic': 0.24,
+            'claude-3-5-sonnet': 5.4,
+            'claude-4-opus': 12.0,
+            'deepseek-r1': 4.0,
+            'openai-gpt-4o': 3.0,
+            'openai-gpt-4o-mini': 0.32,
+        }
+        DEFAULT_PRICING = 0.50
+        
+        st.markdown("---")
+        st.markdown("#### Cortex REST API")
+        
+        if not data.empty and 'START_TIME' in data.columns:
+            min_date = data['START_TIME'].min()
+            max_date = data['START_TIME'].max()
+            st.caption(f"Data from {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}")
+        
+        data = data.copy()
+        data['MODEL_NAME'] = data['MODEL_NAME'].fillna('unknown')
+        data['MODEL_NAME'] = data['MODEL_NAME'].astype(str).str.replace('"', '')
+        
+        def get_model_price(model_name):
+            model_lower = str(model_name).lower()
+            for key, price in MODEL_PRICING.items():
+                if key in model_lower:
+                    return price
+            return DEFAULT_PRICING
+        
+        data['CREDITS_PER_M_TOKENS'] = data['MODEL_NAME'].apply(get_model_price)
+        data['CREDITS'] = (data['TOKENS'] / 1_000_000) * data['CREDITS_PER_M_TOKENS']
+        
+        credit_price = st.session_state.get('credit_price', 2.00)
+        
+        total_tokens = data['TOKENS'].sum()
+        total_credits = data['CREDITS'].sum()
+        total_cost = total_credits * credit_price
+        unique_models = data['MODEL_NAME'].nunique()
+        request_count = len(data)
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            if total_tokens >= 1_000_000:
+                st.metric("Total Tokens", f"{total_tokens/1_000_000:,.2f}M")
+            else:
+                st.metric("Total Tokens", f"{total_tokens:,.0f}")
+        with col2:
+            st.metric("Total Credits", f"{total_credits:,.4f}")
+        with col3:
+            st.metric("Total Cost", f"${total_cost:,.2f}")
+        with col4:
+            st.metric("API Requests", f"{request_count:,}")
+        
+        model_agg = data.groupby('MODEL_NAME').agg({
+            'TOKENS': 'sum',
+            'CREDITS': 'sum',
+            'REQUEST_ID': 'count'
+        }).reset_index()
+        model_agg.columns = ['Model', 'Tokens', 'Credits', 'Requests']
+        model_agg['Cost'] = model_agg['Credits'] * credit_price
+        model_agg = model_agg.sort_values('Cost', ascending=True)
+        
+        st.markdown("##### Cost by Model")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=model_agg['Model'],
+            x=model_agg['Cost'],
+            orientation='h',
+            marker=dict(color='#17becf'),
+            text=[f"${v:,.2f}" for v in model_agg['Cost']],
+            textposition='auto'
+        ))
+        
+        fig.update_layout(
+            xaxis_title="Cost ($)",
+            yaxis_title="Model",
+            height=max(300, len(model_agg) * 40),
+            showlegend=False,
+            margin=dict(l=0, r=0, t=10, b=0)
+        )
+        
+        render_plotly_chart(fig)
+        
+        st.markdown("##### REST API Usage Details")
+        
+        display_df = model_agg.copy()
+        display_df = display_df.sort_values('Cost', ascending=False)
+        display_df['Tokens'] = display_df['Tokens'].apply(lambda x: f"{x:,.0f}")
+        display_df['Credits'] = display_df['Credits'].apply(lambda x: f"{x:,.4f}")
+        display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
+        display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
+        
+        st.dataframe(
+            display_df[['Model', 'Requests', 'Tokens', 'Credits', 'Cost']],
+            use_container_width=True,
+            hide_index=True,
+            height=min(400, len(display_df) * 35 + 50)
+        )
+    
     def _format_credits(self, credits: float) -> str:
         """
-        Format credit values consistently with 2 decimal places.
+        Format credit values consistently with dollar amount.
         
         Args:
             credits: Credit value to format
             
         Returns:
-            Formatted credit string (e.g., "1,234.56")
+            Formatted credit string with dollar amount (e.g., "1,234.56 ($2,469.12)")
         """
         if pd.isna(credits) or credits is None:
-            return "0.00"
-        return f"{credits:,.2f}"
+            return "0.00 ($0.00)"
+        credit_price = st.session_state.get('credit_price', 2.00)
+        dollar_amount = credits * credit_price
+        if dollar_amount < 1000:
+            return f"{credits:,.2f} (${dollar_amount:,.2f})"
+        else:
+            return f"{credits:,.2f} (${dollar_amount:,.0f})"
     
     def _handle_no_data(self, service_name: str) -> None:
         """
@@ -5542,7 +5816,7 @@ class AIServicesAnalyzer:
         Args:
             service_name: Name of the service with no data
         """
-        st.info(f"ℹ️ No {service_name} usage found in the last 12 months.")
+        st.info(f"No {service_name} usage found in the last 12 months.")
 
 
 # Removed: ComprehensiveAIServicesAnalyzer class (replaced by AIServicesAnalyzer above)
@@ -5573,19 +5847,29 @@ class DataAccessManager:
         """Initialize connection based on environment (Snowflake Streamlit vs external)."""
         try:
             if SNOWFLAKE_AVAILABLE:
-                # Running inside Snowflake Streamlit environment
-                self.session = get_active_session()
-                self.connection_type = "snowpark_session"
-                st.session_state.connection_info = "✅ Connected via Snowflake Streamlit Session"
-                
-                # With ACCOUNTADMIN role, we should have full ACCOUNT_USAGE access
-                st.session_state.connection_validated = True
-                self._connection_validated = True
-                
-            else:
-                # Fallback for external development (would need credentials)
-                self.connection_type = "external_connector"
-                st.session_state.connection_info = "External connection mode (credentials required)"
+                # Try Snowflake Streamlit environment first
+                try:
+                    self.session = get_active_session()
+                    self.connection_type = "snowpark_session"
+                    st.session_state.connection_info = "Connected via Snowflake Streamlit Session"
+                    self.session.sql("USE WAREHOUSE AICOLLEGE").collect()
+                    st.session_state.connection_validated = True
+                    self._connection_validated = True
+                    return
+                except Exception:
+                    pass
+            
+            # Fallback for local development - create Snowpark session from connection name
+            from snowflake.snowpark import Session
+            import os
+            conn_name = os.getenv("SNOWFLAKE_CONNECTION_NAME") or "jgilstrap_demo"
+            self.session = Session.builder.config("connection_name", conn_name).create()
+            self.session.sql("USE ROLE SYSADMIN").collect()
+            self.session.sql("USE WAREHOUSE AICOLLEGE").collect()
+            self.connection_type = "snowpark_session"
+            st.session_state.connection_info = "Connected via local Snowpark Session"
+            st.session_state.connection_validated = True
+            self._connection_validated = True
                 
         except Exception as e:
             st.session_state.connection_info = f"Connection initialization failed: {str(e)}"
@@ -5685,13 +5969,14 @@ class DataAccessManager:
                     result = self.session.sql(query).to_pandas()
                     return result
                     
-                elif self.connection_type == "external_connector" and hasattr(self, 'external_connection'):
+                elif self.connection_type == "external_connector" and hasattr(self, '_external_conn'):
                     # Fallback for external connections (development only)
-                    with self.external_connection.cursor(DictCursor) as cursor:
-                        cursor.execute(query, params)
-                        columns = [desc[0] for desc in cursor.description]
-                        data = cursor.fetchall()
-                        return pd.DataFrame(data, columns=columns)
+                    cursor = self._external_conn.cursor()
+                    cursor.execute(query)
+                    columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                    data = cursor.fetchall()
+                    cursor.close()
+                    return pd.DataFrame(data, columns=columns)
                 else:
                     st.error("❌ No valid connection available")
                     return None
@@ -5708,7 +5993,7 @@ class DataAccessManager:
                     return None
                 elif attempt < self.max_retries - 1:
                     # Retry for transient errors
-                    st.warning(f"⚠️ Query attempt {attempt + 1} failed, retrying... ({error_msg})")
+                    st.warning(f"Query attempt {attempt + 1} failed, retrying... ({error_msg})")
                     time.sleep(self.retry_delay * (2 ** attempt))  # Exponential backoff
                     continue
                 else:
@@ -5849,7 +6134,7 @@ class DataAccessManager:
 # Configure Streamlit page settings
 st.set_page_config(
     page_title="Snowflake Cost Dashboard",
-    page_icon="❄️",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -5916,8 +6201,186 @@ class SnowflakeUsageDashboard:
     
     def render_sidebar(self):
         """Create and render the sidebar navigation."""
+        st.markdown("""
+            <style>
+            /* Snowflake Theme - #00A1D9 blue and white */
+            
+            /* Main header styling */
+            h1, h2, h3 {
+                color: #00A1D9 !important;
+            }
+            
+            /* Sidebar styling */
+            [data-testid="stSidebar"] {
+                background-color: #00A1D9 !important;
+            }
+            [data-testid="stSidebar"] * {
+                color: white !important;
+            }
+            [data-testid="stSidebar"] h1, 
+            [data-testid="stSidebar"] h2, 
+            [data-testid="stSidebar"] h3 {
+                color: white !important;
+            }
+            [data-testid="stSidebar"] a {
+                color: white !important;
+            }
+            [data-testid="stSidebar"] .stNumberInput input {
+                color: #333 !important;
+                background-color: white !important;
+            }
+            
+            /* Primary buttons */
+            .stButton > button[kind="primary"] {
+                background-color: #00A1D9 !important;
+                border-color: #00A1D9 !important;
+            }
+            
+            /* Metric styling */
+            [data-testid="stMetricValue"] {
+                color: #00A1D9 !important;
+            }
+            
+            /* Tab styling */
+            .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
+                background-color: #00A1D9 !important;
+                color: white !important;
+                box-shadow: 0 6px 12px rgba(0, 161, 217, 0.5), 0 3px 6px rgba(0, 0, 0, 0.15) !important;
+                transform: translateY(-2px);
+                border-bottom: 3px solid white !important;
+            }
+            .stTabs [data-baseweb="tab-list"] button {
+                transition: all 0.2s ease !important;
+                border-radius: 4px 4px 0 0 !important;
+                color: #00A1D9 !important;
+                border-bottom: 3px solid transparent !important;
+            }
+            .stTabs [data-baseweb="tab-list"] button:hover:not([aria-selected="true"]) {
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+                border-bottom: 3px solid #00A1D9 !important;
+            }
+            
+            /* Global hover/selection highlight - blue instead of red */
+            ::selection {
+                background-color: rgba(0, 161, 217, 0.3) !important;
+                color: inherit !important;
+            }
+            *:focus {
+                outline-color: #00A1D9 !important;
+            }
+            button:hover, [role="button"]:hover {
+                border-color: #00A1D9 !important;
+            }
+            [data-baseweb="select"] [aria-selected="true"],
+            [data-baseweb="menu"] li:hover,
+            [data-baseweb="popover"] li:hover {
+                background-color: rgba(0, 161, 217, 0.1) !important;
+            }
+            
+            /* Multiselect tags/pills - blue instead of red */
+            [data-baseweb="tag"] {
+                background-color: #00A1D9 !important;
+            }
+            [data-baseweb="tag"] span {
+                color: white !important;
+            }
+            [data-baseweb="tag"] svg {
+                fill: white !important;
+            }
+            
+            /* Sub-headers - blue */
+            h2, h3, h4, h6 {
+                color: #00A1D9 !important;
+            }
+            
+            /* Links */
+            a {
+                color: #00A1D9 !important;
+            }
+            
+            /* Dividers */
+            hr {
+                border-color: #00A1D9 !important;
+                opacity: 0.3;
+            }
+            
+            /* Radio buttons - all (blue border, white bg, blue fill when selected) */
+            [data-testid="stRadio"] label[data-baseweb="radio"] > div:first-child {
+                border: 2px solid #00A1D9 !important;
+                background-color: white !important;
+                width: 18px !important;
+                height: 18px !important;
+            }
+            [data-testid="stRadio"] label[data-baseweb="radio"] > div:first-child > div {
+                background-color: transparent !important;
+            }
+            [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) > div:first-child > div {
+                background-color: #00A1D9 !important;
+            }
+            
+            /* Radio button text in sidebar should be white */
+            [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] span {
+                color: white !important;
+            }
+            
+            /* Sidebar buttons - dark text on white background */
+            [data-testid="stSidebar"] button[kind="secondary"] {
+                background-color: white !important;
+                color: #333333 !important;
+                border: 1px solid #00A1D9 !important;
+            }
+            [data-testid="stSidebar"] button[kind="secondary"] p {
+                color: #333333 !important;
+            }
+            [data-testid="stSidebar"] button[kind="secondary"]:hover {
+                background-color: #00A1D9 !important;
+                color: white !important;
+            }
+            [data-testid="stSidebar"] button[kind="secondary"]:hover p {
+                color: white !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+        
         with st.sidebar:
-            st.title("❄️ Snowflake Cost Dashboard")
+            st.title("Snowflake Cost Dashboard")
+            st.caption("by Jack Gilstrap")
+            st.markdown("[Credit Consumption Table](https://www.snowflake.com/legal-files/CreditConsumptionTable.pdf)")
+            st.markdown("---")
+            
+            st.subheader("Settings")
+            st.markdown("""
+                <style>
+                    div[data-testid="stNumberInput"] button {
+                        display: none;
+                    }
+                </style>
+            """, unsafe_allow_html=True)
+            # Get persisted credit price from URL params on first load only
+            if 'credit_price' not in st.session_state:
+                if 'credit_price' in st.query_params:
+                    try:
+                        st.session_state.credit_price = float(st.query_params['credit_price'])
+                    except ValueError:
+                        st.session_state.credit_price = 2.00
+                else:
+                    st.session_state.credit_price = 2.00
+            
+            def on_credit_price_change():
+                st.session_state.credit_price = st.session_state.credit_price_input
+                st.query_params['credit_price'] = str(st.session_state.credit_price_input)
+            
+            st.number_input(
+                "Credit Price ($)",
+                min_value=0.00,
+                max_value=100.00,
+                value=st.session_state.credit_price,
+                step=0.01,
+                format="%.2f",
+                key="credit_price_input",
+                help="Enter the price per Snowflake credit for cost calculations",
+                on_change=on_credit_price_change
+            )
             st.markdown("---")
             
             # Navigation tabs - use a more reliable approach
@@ -5940,7 +6403,7 @@ class SnowflakeUsageDashboard:
     
     def render_connection_section(self):
         """Display connection status and management in sidebar."""
-        st.subheader("📊 Connection Status")
+        st.subheader("Connection Status")
         
         if self.data_manager:
             # Get connection info
@@ -5948,15 +6411,13 @@ class SnowflakeUsageDashboard:
             
             # Display connection status
             if conn_info.get("session_available", False):
-                st.success("✅ Connected to Snowflake")
-                st.success("✅ ACCOUNT_USAGE accessible")
-                st.caption(f"Type: {conn_info.get('connection_type', 'Unknown')}")
+                st.caption(f"Connected ({conn_info.get('connection_type', 'Unknown')})")
             else:
                 st.error("❌ Connection not available")
                 st.caption(conn_info.get("info", "No connection info"))
             
             # Show expandable connection details for advanced users
-            with st.expander("🔧 Advanced Connection Info"):
+            with st.expander("Advanced Connection Info"):
                 st.caption("**Connection Details:**")
                 st.text(conn_info.get("info", "No connection info available"))
                 
@@ -5975,7 +6436,7 @@ class SnowflakeUsageDashboard:
     
     def render_data_management_section(self):
         """Display data management controls in sidebar."""
-        st.subheader("🔄 Data Management")
+        st.subheader("Data Management")
         
         # Cache management
         cache_count = len(st.session_state.data_cache)
@@ -5999,7 +6460,7 @@ class SnowflakeUsageDashboard:
             try:
                 result = self.data_manager.execute_query("SELECT CURRENT_TIMESTAMP() as NOW")
                 if result is not None and not result.empty:
-                    st.success("✅ Query test successful!")
+                    st.success("Query test successful!")
                     st.write(f"Current time: {result.iloc[0]['NOW']}")
                 else:
                     st.error("❌ Query test failed - no results")
@@ -6021,7 +6482,7 @@ class SnowflakeUsageDashboard:
                         CURRENT_WAREHOUSE() as CURRENT_WAREHOUSE
                 """)
                 if result is not None and not result.empty:
-                    st.success("✅ Role information retrieved!")
+                    st.success("Role information retrieved!")
                     row = result.iloc[0]
                     st.write(f"**User:** {row['CURRENT_USER']}")
                     st.write(f"**Role:** {row['CURRENT_ROLE']}")  
@@ -6041,7 +6502,7 @@ class SnowflakeUsageDashboard:
             summary = self.data_manager.get_account_usage_summary()
             
             if summary.get("status") == "success":
-                st.success("📊 Account usage data is available!")
+                st.success("Account usage data is available!")
                 
                 # Display view summary
                 if summary.get("view_summary"):
@@ -6050,7 +6511,7 @@ class SnowflakeUsageDashboard:
                         st.write(f"• **{view_info['VIEW_NAME']}**: {view_info['RECORD_COUNT']} records, latest: {view_info['LATEST_DATE']}")
                         
             elif summary.get("status") == "warning":
-                st.warning(f"⚠️ {summary['message']}")
+                st.warning(f"{summary['message']}")
             else:
                 st.error(f"❌ {summary['message']}")
     
@@ -6058,7 +6519,7 @@ class SnowflakeUsageDashboard:
         """Clear all cached data."""
         st.session_state.data_cache.clear()
         st.session_state.cache_timestamps.clear()
-        st.success("🗑️ Cache cleared successfully!")
+        st.success("🗑Cache cleared successfully!")
         st.rerun()
     
     def refresh_current_tab_data(self):
@@ -6074,7 +6535,7 @@ class SnowflakeUsageDashboard:
             if key in st.session_state.cache_timestamps:
                 del st.session_state.cache_timestamps[key]
         
-        st.success(f"🔄 Refreshed {current_tab} data!")
+        st.success(f"Refreshed {current_tab} data!")
         st.rerun()
     
     def render_main_content(self):
@@ -6082,7 +6543,7 @@ class SnowflakeUsageDashboard:
         current_tab = st.session_state.current_tab
         
         # Main content header
-        st.title(f"📈 {current_tab}")
+        st.title(f"{current_tab}")
         
         # Route to appropriate tab content
         if current_tab == "Overview":
@@ -6106,43 +6567,40 @@ class SnowflakeUsageDashboard:
     
     def render_overview_tab(self):
         """Render the Overview dashboard tab."""
-        st.markdown("### 📊 Cost Overview Dashboard")
-        st.markdown("Welcome to your Snowflake cost monitoring dashboard with comprehensive service analysis and trend insights.")
         
         # Simple connection check - if we have a session, we're good to go
         if not self.data_manager or not self.data_manager.session:
             st.error("❌ No active Snowflake session available")
-            st.info("💡 **Note:** This app requires an active Snowflake Streamlit session.")
+            st.info("**Note:** This app requires an active Snowflake Streamlit session.")
             return
         
         # Connection is available - render the dashboard
-        st.success("✅ Connected to Snowflake with ACCOUNT_USAGE access")
-        
-        # Render monthly service costs section
-        self.render_monthly_service_costs()
         
         # Render yearly consumption projection section
-        st.markdown("---")
         self.render_yearly_projection_section()
+        
+        # Render monthly service costs section
+        st.markdown("---")
+        self.render_monthly_service_costs()
     
     def render_yearly_projection_section(self):
         """Render the yearly consumption projection section."""
-        st.markdown("### 🔮 Yearly Consumption Projections")
+        st.markdown("### Yearly Consumption Projections")
         st.markdown("Forecast your annual Snowflake costs based on recent usage patterns.")
         
         # Load yearly projection data
         projection_data = self.get_yearly_projection_data()
         
         if projection_data is None or projection_data.empty:
-            st.warning("📊 Insufficient data for yearly projections.")
-            st.info("💡 **Tip:** Projections require at least 30 days of recent usage data.")
+            st.warning("Insufficient data for yearly projections.")
+            st.info("**Tip:** Projections require at least 30 days of recent usage data.")
             return
         
         # Projection controls
-        col1, col2 = st.columns([2, 1])
+        col1, col2 = st.columns([3, 1])
         
         with col2:
-            st.markdown("#### 📅 Projection Settings")
+            st.markdown("#### Projection Settings")
             run_rate_period = st.radio(
                 "Run Rate Period:",
                 ["30-day", "60-day", "90-day"],
@@ -6159,31 +6617,23 @@ class SnowflakeUsageDashboard:
             projection_metrics = self.calculate_projection_metrics(projection_data, period_days)
             
             if projection_metrics:
-                st.markdown("**📊 Projection Details:**")
+                st.markdown("**Projection Details:**")
                 st.metric(
                     label="Current YTD Total",
-                    value=f"{projection_metrics['ytd_actual']:,.0f} credits"
+                    value=format_credits_with_dollars(projection_metrics['ytd_actual'])
                 )
                 st.metric(
                     label=f"Daily Avg ({period_days} days)",
-                    value=f"{projection_metrics['daily_average']:,.0f} credits",
+                    value=format_credits_with_dollars(projection_metrics['daily_average']),
                     help=f"Based on {projection_metrics['actual_days_used']} days of recent data"
                 )
                 st.metric(
                     label="Projected Year Total",
-                    value=f"{projection_metrics['projected_total']:,.0f} credits",
-                    delta=f"{projection_metrics['projection_increase']:+,.0f} credits remaining"
+                    value=format_credits_with_dollars(projection_metrics['projected_total'])
                 )
                 
                 # Show projection date range and actual period used
                 st.caption(f"**Actual period used:** {projection_metrics['start_date']} to {projection_metrics['end_date']} ({projection_metrics['actual_days_used']} days)")
-                st.caption(f"**Requested period:** {period_days} days")
-                
-                # Show warning if actual period is significantly different from requested
-                if projection_metrics['actual_days_used'] < period_days * 0.8:
-                    st.warning(f"⚠️ Only {projection_metrics['actual_days_used']} days of data available (requested {period_days} days)")
-                elif projection_metrics['actual_days_used'] != period_days:
-                    st.info(f"ℹ️ Using {projection_metrics['actual_days_used']} days of available data")
         
         with col1:
             # Render projection chart
@@ -6417,70 +6867,34 @@ class SnowflakeUsageDashboard:
             ]
         )
         
-        # Add shaded area for projection uncertainty
-        fig.add_hrect(
-            y0=metrics['projected_total'] * 0.9,
-            y1=metrics['projected_total'] * 1.1,
-            fillcolor="orange",
-            opacity=0.1,
-            layer="below",
-            line_width=0,
-            annotation_text="±10% projection range",
-            annotation_position="top right"
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Add insights
-        with st.expander("📈 **Projection Insights**"):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**📊 Key Metrics:**")
-                st.write(f"• **Current YTD**: {metrics['ytd_actual']:,.0f} credits")
-                st.write(f"• **Projected Year-End**: {metrics['projected_total']:,.0f} credits")
-                st.write(f"• **Remaining Projection**: {metrics['projection_increase']:,.0f} credits")
-                st.write(f"• **Days Remaining**: {metrics['days_remaining']} days")
-            
-            with col2:
-                st.markdown("**⚡ Run Rate Analysis:**")
-                st.write(f"• **Requested Period**: {period_days} days")
-                st.write(f"• **Actual Data Used**: {metrics['actual_days_used']} days")
-                st.write(f"• **Daily Average**: {metrics['daily_average']:,.0f} credits/day")
-                st.write(f"• **Analysis Period**: {metrics['start_date']} to {metrics['end_date']}")
-                
-                # Show data completeness
-                data_completeness = (metrics['actual_days_used'] / period_days) * 100
-                if data_completeness < 80:
-                    st.write(f"• **Data Completeness**: {data_completeness:.0f}% ⚠️")
-                else:
-                    st.write(f"• **Data Completeness**: {data_completeness:.0f}% ✅")
-            
-            # Add interpretation
-            if metrics['projected_total'] > metrics['ytd_actual'] * 2:
-                st.info("📈 **Trend**: Consumption is accelerating - consider budget adjustments")
-            elif metrics['projected_total'] < metrics['ytd_actual'] * 1.5:
-                st.success("📉 **Trend**: Consumption is steady - on track with historical patterns")
-            else:
-                st.warning("📊 **Trend**: Moderate growth - monitor for seasonal variations")
+        render_plotly_chart(fig)
     
     def render_monthly_service_costs(self):
         """Render the monthly service costs section with charts and tables."""
-        st.markdown("### 💰 Monthly Service Costs & Trends")
+        st.markdown("### Monthly Compute Service Costs & Trends")
+        
+        # Day range selector
+        day_options = {30: "Last 30 Days", 60: "Last 60 Days", 90: "Last 90 Days"}
+        selected_days = st.selectbox(
+            "Time Period",
+            options=list(day_options.keys()),
+            format_func=lambda x: day_options[x],
+            key="service_costs_days"
+        )
         
         # Load monthly service cost data
-        monthly_data = self.get_monthly_service_costs()
+        monthly_data = self.get_monthly_service_costs(days=selected_days)
         
         if monthly_data is None or monthly_data.empty:
-            st.warning("📊 No service cost data available for the selected period.")
-            st.info("💡 **Tip:** Ensure your account has recent usage data and proper ACCOUNT_USAGE permissions.")
+            st.warning("No service cost data available for the selected period.")
+            st.info("**Tip:** Ensure your account has recent usage data and proper ACCOUNT_USAGE permissions.")
             return
         
         # Display summary metrics
-        self.render_cost_summary_metrics(monthly_data)
+        self.render_cost_summary_metrics(monthly_data, selected_days)
         
         # Create tabs for different visualizations
-        viz_tabs = st.tabs(["📈 Monthly Trends", "📊 Service Breakdown", "📋 Detailed Data"])
+        viz_tabs = st.tabs(["Monthly Trends", "Service Breakdown", "Detailed Data"])
         
         with viz_tabs[0]:
             self.render_monthly_trends_chart(monthly_data)
@@ -6491,61 +6905,56 @@ class SnowflakeUsageDashboard:
         with viz_tabs[2]:
             self.render_detailed_data_table(monthly_data)
     
-    def get_monthly_service_costs(self) -> Optional[pd.DataFrame]:
+    def get_monthly_service_costs(self, days: int = 30) -> Optional[pd.DataFrame]:
         """
-        Retrieve monthly service costs data with month-over-month calculations.
+        Retrieve daily service costs data for period-over-period comparison.
+        
+        Args:
+            days: Number of days for the period (30, 60, or 90)
         
         Returns:
-            Optional[pd.DataFrame]: Monthly service costs with MoM changes
+            Optional[pd.DataFrame]: Daily service costs with period comparison data
         """
-        cache_key = "monthly_service_costs"
+        cache_key = f"monthly_service_costs_{days}"
         
         # Check cache first
         if cache_key in st.session_state.data_cache:
             return st.session_state.data_cache[cache_key]
         
-        query = """
-        WITH monthly_usage AS (
+        # Query gets data from 24 hours ago going back 2x the period (for current + previous period)
+        # End date is 24 hours ago to account for ACCOUNT_USAGE latency
+        query = f"""
+        WITH period_data AS (
             SELECT 
-                DATE_TRUNC('month', START_TIME) as USAGE_MONTH,
+                DATE(START_TIME) as USAGE_DATE,
                 SERVICE_TYPE,
                 SUM(CREDITS_USED_COMPUTE) as COMPUTE_CREDITS,
                 SUM(CREDITS_USED_CLOUD_SERVICES) as CLOUD_SERVICES_CREDITS,
-                SUM(CREDITS_USED) as TOTAL_CREDITS
-            FROM SNOWFLAKE.ACCOUNT_USAGE.METERING_HISTORY
-            WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
-            GROUP BY DATE_TRUNC('month', START_TIME), SERVICE_TYPE
-        ),
-        monthly_with_previous AS (
-            SELECT 
-                USAGE_MONTH,
-                SERVICE_TYPE,
-                COMPUTE_CREDITS,
-                CLOUD_SERVICES_CREDITS,
-                TOTAL_CREDITS,
-                LAG(TOTAL_CREDITS) OVER (PARTITION BY SERVICE_TYPE ORDER BY USAGE_MONTH) as PREV_MONTH_CREDITS,
+                SUM(CREDITS_USED) as TOTAL_CREDITS,
+                -- Mark which period: 'CURRENT' = last N days, 'PREVIOUS' = N days before that
                 CASE 
-                    WHEN LAG(TOTAL_CREDITS) OVER (PARTITION BY SERVICE_TYPE ORDER BY USAGE_MONTH) > 0 
-                    THEN ((TOTAL_CREDITS - LAG(TOTAL_CREDITS) OVER (PARTITION BY SERVICE_TYPE ORDER BY USAGE_MONTH)) 
-                          / LAG(TOTAL_CREDITS) OVER (PARTITION BY SERVICE_TYPE ORDER BY USAGE_MONTH)) * 100
-                    ELSE NULL 
-                END as MOM_PERCENT_CHANGE
-            FROM monthly_usage
+                    WHEN DATE(START_TIME) > DATEADD('day', -{days}, DATEADD('hour', -24, CURRENT_TIMESTAMP()))
+                    THEN 'CURRENT'
+                    ELSE 'PREVIOUS'
+                END as PERIOD
+            FROM SNOWFLAKE.ACCOUNT_USAGE.METERING_HISTORY
+            WHERE START_TIME >= DATEADD('day', -{days * 2}, DATEADD('hour', -24, CURRENT_TIMESTAMP()))
+              AND START_TIME < DATEADD('hour', -24, CURRENT_TIMESTAMP())
+            GROUP BY DATE(START_TIME), SERVICE_TYPE
         )
         SELECT 
-            USAGE_MONTH,
+            USAGE_DATE,
             SERVICE_TYPE,
             COMPUTE_CREDITS,
-            CLOUD_SERVICES_CREDITS, 
+            CLOUD_SERVICES_CREDITS,
             TOTAL_CREDITS,
-            PREV_MONTH_CREDITS,
-            ROUND(MOM_PERCENT_CHANGE, 2) as MOM_PERCENT_CHANGE
-        FROM monthly_with_previous
-        ORDER BY USAGE_MONTH DESC, SERVICE_TYPE
+            PERIOD
+        FROM period_data
+        ORDER BY USAGE_DATE DESC, SERVICE_TYPE
         """
         
         try:
-            with st.spinner("Loading monthly service costs..."):
+            with st.spinner("Loading service costs..."):
                 result = self.data_manager.execute_query(query)
                 
                 if result is not None and not result.empty:
@@ -6559,85 +6968,108 @@ class SnowflakeUsageDashboard:
             st.error(f"❌ Failed to load service costs: {str(e)}")
             return None
     
-    def render_cost_summary_metrics(self, data: pd.DataFrame):
+    def render_cost_summary_metrics(self, data: pd.DataFrame, days: int = 30):
         """Render summary cost metrics at the top of the overview."""
-        current_month = data['USAGE_MONTH'].max()
-        current_month_data = data[data['USAGE_MONTH'] == current_month]
+        # Split data into current and previous periods
+        current_data = data[data['PERIOD'] == 'CURRENT']
+        previous_data = data[data['PERIOD'] == 'PREVIOUS']
         
-        if current_month_data.empty:
-            return
+        # Calculate totals for current period
+        total_credits = current_data['TOTAL_CREDITS'].sum()
+        total_compute_credits = current_data['COMPUTE_CREDITS'].sum()
+        total_cloud_services_credits = current_data['CLOUD_SERVICES_CREDITS'].sum()
+        active_services = current_data['SERVICE_TYPE'].nunique()
         
-        # Calculate summary metrics
-        total_current_credits = current_month_data['TOTAL_CREDITS'].sum()
-        total_compute_credits = current_month_data['COMPUTE_CREDITS'].sum()
-        total_cloud_services_credits = current_month_data['CLOUD_SERVICES_CREDITS'].sum()
+        # Calculate period-over-period change
+        total_prev_credits = previous_data['TOTAL_CREDITS'].sum()
         
-        # Get previous month for comparison
-        previous_months = data[data['USAGE_MONTH'] < current_month]['USAGE_MONTH'].unique()
-        if len(previous_months) > 0:
-            prev_month = max(previous_months)
-            prev_month_data = data[data['USAGE_MONTH'] == prev_month]
-            total_prev_credits = prev_month_data['TOTAL_CREDITS'].sum()
-            
-            if total_prev_credits > 0:
-                overall_mom_change = ((total_current_credits - total_prev_credits) / total_prev_credits) * 100
-            else:
-                overall_mom_change = 0
+        if total_prev_credits > 0:
+            period_change = ((total_credits - total_prev_credits) / total_prev_credits) * 100
         else:
-            overall_mom_change = 0
+            period_change = 0
         
         # Display metrics in columns
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.metric(
-                label="📊 Total Credits (Current Month)",
-                value=f"{total_current_credits:,.0f}",
-                delta=f"{overall_mom_change:+.1f}%" if overall_mom_change != 0 else None
+                label=f"Total Credits ({days}d)",
+                value=format_credits_with_dollars(total_credits),
+                delta=f"{period_change:+.1f}% vs prior {days}d" if period_change != 0 else None
             )
         
         with col2:
             st.metric(
-                label="💻 Compute Credits",
-                value=f"{total_compute_credits:,.0f}",
+                label="Compute Credits",
+                value=format_credits_with_dollars(total_compute_credits),
                 delta=None
             )
         
         with col3:
             st.metric(
-                label="☁️ Cloud Services Credits", 
-                value=f"{total_cloud_services_credits:,.0f}",
+                label="Cloud Services Credits", 
+                value=format_credits_with_dollars(total_cloud_services_credits),
                 delta=None
             )
         
         with col4:
-            active_services = current_month_data['SERVICE_TYPE'].nunique()
             st.metric(
-                label="🏷️ Active Services",
+                label="Active Services",
                 value=f"{active_services}",
                 delta=None
             )
     
     def render_monthly_trends_chart(self, data: pd.DataFrame):
-        """Render monthly trends chart showing cost evolution over time."""
-        st.markdown("#### 📈 Monthly Cost Trends by Service Type")
+        """Render daily trends chart showing cost evolution over time."""
+        
+        # Only show current period for the trend chart
+        current_data = data[data['PERIOD'] == 'CURRENT'].copy()
         
         # Group data for visualization
-        monthly_totals = data.groupby(['USAGE_MONTH', 'SERVICE_TYPE'])['TOTAL_CREDITS'].sum().reset_index()
+        daily_totals = current_data.groupby(['USAGE_DATE', 'SERVICE_TYPE'])['TOTAL_CREDITS'].sum().reset_index()
         
-        if monthly_totals.empty:
+        if daily_totals.empty:
             st.warning("No trend data available")
             return
         
+        st.markdown("#### Daily Cost Trends by Service Type")
+        
+        available_services = sorted(daily_totals['SERVICE_TYPE'].unique().tolist())
+        
+        with st.expander(f"Filter Service Types ({len(available_services)} available)", expanded=False):
+            selected_services = st.multiselect(
+                "Select services to include in chart:",
+                options=available_services,
+                default=available_services,
+                key="trend_service_type_filter",
+                label_visibility="collapsed"
+            )
+            st.caption(f"{len(selected_services)} of {len(available_services)} services selected")
+        
+        # Filter data based on selection
+        if selected_services:
+            filtered_data = daily_totals[daily_totals['SERVICE_TYPE'].isin(selected_services)]
+        else:
+            filtered_data = daily_totals
+        
+        if filtered_data.empty:
+            st.warning("No data for selected service types")
+            return
+        
+        # Create fixed color mapping so colors stay consistent when filtering
+        color_palette = px.colors.qualitative.Plotly + px.colors.qualitative.Set2 + px.colors.qualitative.Pastel
+        color_map = {service: color_palette[i % len(color_palette)] for i, service in enumerate(available_services)}
+        
         # Create line chart
         fig = px.line(
-            monthly_totals,
-            x='USAGE_MONTH',
+            filtered_data,
+            x='USAGE_DATE',
             y='TOTAL_CREDITS',
             color='SERVICE_TYPE',
-            title='Monthly Credits Usage by Service Type',
+            color_discrete_map=color_map,
+            title='Daily Credits Usage by Service Type',
             labels={
-                'USAGE_MONTH': 'Month',
+                'USAGE_DATE': 'Date',
                 'TOTAL_CREDITS': 'Credits Used',
                 'SERVICE_TYPE': 'Service Type'
             }
@@ -6658,49 +7090,30 @@ class SnowflakeUsageDashboard:
         # Add time range information to chart
         update_chart_with_time_range(
             fig, 
-            monthly_totals, 
-            'USAGE_MONTH', 
-            'Month', 
-            'Monthly Credits Usage by Service Type'
+            filtered_data, 
+            'USAGE_DATE', 
+            'Date', 
+            'Daily Credits Usage by Service Type'
         )
         
         fig.update_traces(line=dict(width=3))
         render_plotly_chart(fig)
-        
-        # Month-over-month change chart
-        st.markdown("#### 📊 Month-over-Month Percentage Changes")
-        
-        mom_data = data[data['MOM_PERCENT_CHANGE'].notna()].copy()
-        if not mom_data.empty:
-            fig_mom = px.bar(
-                mom_data,
-                x='USAGE_MONTH',
-                y='MOM_PERCENT_CHANGE',
-                color='SERVICE_TYPE',
-                title='Month-over-Month Percentage Change by Service',
-                labels={
-                    'USAGE_MONTH': 'Month',
-                    'MOM_PERCENT_CHANGE': 'MoM Change (%)',
-                    'SERVICE_TYPE': 'Service Type'
-                }
-            )
-            
-            fig_mom.update_layout(height=400)
-            fig_mom.add_hline(y=0, line_dash="dash", line_color="gray")
-            st.plotly_chart(fig_mom, use_container_width=True)
-        else:
-            st.info("Insufficient data for month-over-month comparison")
     
     def render_service_breakdown_charts(self, data: pd.DataFrame):
-        """Render service breakdown charts showing current month distribution."""
-        st.markdown("#### 🏷️ Current Month Service Breakdown")
+        """Render service breakdown charts showing current period distribution."""
+        st.markdown("#### Current Period Service Breakdown")
         
-        current_month = data['USAGE_MONTH'].max()
-        current_data = data[data['USAGE_MONTH'] == current_month].copy()
+        # Use current period data only
+        current_data = data[data['PERIOD'] == 'CURRENT'].copy()
         
         if current_data.empty:
-            st.warning("No current month data available")
+            st.warning("No current period data available")
             return
+        
+        # Get date range for the title
+        min_date = pd.to_datetime(current_data['USAGE_DATE']).min()
+        max_date = pd.to_datetime(current_data['USAGE_DATE']).max()
+        date_range_str = f"{min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}"
         
         col1, col2 = st.columns(2)
         
@@ -6712,10 +7125,10 @@ class SnowflakeUsageDashboard:
                 service_totals,
                 values='TOTAL_CREDITS',
                 names='SERVICE_TYPE',
-                title=f'Credits Distribution by Service ({current_month.strftime("%Y-%m")})'
+                title=f'Credits Distribution by Service ({date_range_str})'
             )
             fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
+            render_plotly_chart(fig_pie)
         
         with col2:
             # Bar chart for service comparison
@@ -6724,15 +7137,15 @@ class SnowflakeUsageDashboard:
                 x='TOTAL_CREDITS',
                 y='SERVICE_TYPE',
                 orientation='h',
-                title=f'Credits by Service ({current_month.strftime("%Y-%m")})',
+                title=f'Credits by Service ({date_range_str})',
                 labels={'TOTAL_CREDITS': 'Credits Used', 'SERVICE_TYPE': 'Service Type'}
             )
             fig_bar.update_layout(height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            render_plotly_chart(fig_bar)
     
     def render_detailed_data_table(self, data: pd.DataFrame):
         """Render detailed data table with sorting and filtering capabilities."""
-        st.markdown("#### 📋 Detailed Monthly Service Costs")
+        st.markdown("#### Detailed Daily Service Costs")
         
         # Add filters
         col1, col2, col3 = st.columns(3)
@@ -6747,16 +7160,11 @@ class SnowflakeUsageDashboard:
             )
         
         with col2:
-            # Month range filter - convert pandas Timestamps to Python datetime
-            min_month = data['USAGE_MONTH'].min().to_pydatetime()
-            max_month = data['USAGE_MONTH'].max().to_pydatetime()
-            selected_months = st.slider(
-                "Select Month Range:",
-                value=(min_month, max_month),
-                min_value=min_month,
-                max_value=max_month,
-                format="YYYY-MM",
-                key="month_range_filter"
+            # Period filter
+            selected_period = st.selectbox(
+                "Filter by Period:",
+                ['All', 'CURRENT', 'PREVIOUS'],
+                key="period_filter"
             )
         
         with col3:
@@ -6765,7 +7173,7 @@ class SnowflakeUsageDashboard:
                 "Minimum Credits:",
                 min_value=0.0,
                 value=0.0,
-                step=100.0,
+                step=10.0,
                 key="credits_filter"
             )
         
@@ -6775,14 +7183,8 @@ class SnowflakeUsageDashboard:
         if selected_service != 'All':
             filtered_data = filtered_data[filtered_data['SERVICE_TYPE'] == selected_service]
         
-        # Convert selected_months back to pandas Timestamps for comparison
-        start_month = pd.Timestamp(selected_months[0])
-        end_month = pd.Timestamp(selected_months[1])
-        
-        filtered_data = filtered_data[
-            (filtered_data['USAGE_MONTH'] >= start_month) &
-            (filtered_data['USAGE_MONTH'] <= end_month)
-        ]
+        if selected_period != 'All':
+            filtered_data = filtered_data[filtered_data['PERIOD'] == selected_period]
         
         filtered_data = filtered_data[filtered_data['TOTAL_CREDITS'] >= min_credits]
         
@@ -6792,22 +7194,22 @@ class SnowflakeUsageDashboard:
         
         # Format data for display
         display_data = filtered_data.copy()
-        display_data['USAGE_MONTH'] = display_data['USAGE_MONTH'].dt.strftime('%Y-%m')
+        display_data['USAGE_DATE'] = pd.to_datetime(display_data['USAGE_DATE']).dt.strftime('%Y-%m-%d')
         display_data['TOTAL_CREDITS'] = display_data['TOTAL_CREDITS'].round(2)
         display_data['COMPUTE_CREDITS'] = display_data['COMPUTE_CREDITS'].round(2)
         display_data['CLOUD_SERVICES_CREDITS'] = display_data['CLOUD_SERVICES_CREDITS'].round(2)
         
         # Display table
         st.dataframe(
-            display_data[['USAGE_MONTH', 'SERVICE_TYPE', 'TOTAL_CREDITS', 'COMPUTE_CREDITS', 
-                         'CLOUD_SERVICES_CREDITS', 'MOM_PERCENT_CHANGE']],
+            display_data[['USAGE_DATE', 'SERVICE_TYPE', 'TOTAL_CREDITS', 'COMPUTE_CREDITS', 
+                         'CLOUD_SERVICES_CREDITS', 'PERIOD']],
             column_config={
-                'USAGE_MONTH': 'Month',
+                'USAGE_DATE': 'Date',
                 'SERVICE_TYPE': 'Service Type',
                 'TOTAL_CREDITS': st.column_config.NumberColumn('Total Credits', format="%.2f"),
                 'COMPUTE_CREDITS': st.column_config.NumberColumn('Compute Credits', format="%.2f"),
                 'CLOUD_SERVICES_CREDITS': st.column_config.NumberColumn('Cloud Services Credits', format="%.2f"),
-                'MOM_PERCENT_CHANGE': st.column_config.NumberColumn('MoM Change (%)', format="%.2f")
+                'PERIOD': 'Period'
             },
             use_container_width=True,
             hide_index=True
@@ -6835,19 +7237,19 @@ class SnowflakeUsageDashboard:
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.markdown("**📊 View Options**")
+            st.markdown("**View Options**")
             st.markdown("- Warehouse View")
             st.markdown("- User View") 
             st.markdown("- Client Connection View")
         
         with col2:
-            st.markdown("**📈 Analytics**")
+            st.markdown("**Analytics**")
             st.markdown("- Monthly Consumption Trends")
             st.markdown("- Cost Optimization Opportunities")
             st.markdown("- Usage Pattern Analysis")
         
         with col3:
-            st.markdown("**💡 Features**")
+            st.markdown("**Features**")
             st.markdown("- Interactive Charts")
             st.markdown("- Data Export Capabilities")
             st.markdown("- Drill-down Analysis")
@@ -6924,7 +7326,8 @@ class SnowflakeUsageDashboard:
         st.markdown("""
         <div style='text-align: center; color: gray; font-size: 0.8em;'>
             Snowflake Cost Monitoring Dashboard | Built with Streamlit | 
-            Data Source: ACCOUNT_USAGE Schema
+            Data Source: ACCOUNT_USAGE Schema<br>
+            <em>Disclaimer: Cost estimates are approximate and not official Snowflake billing calculations.</em>
         </div>
         """, unsafe_allow_html=True)
     
@@ -6954,7 +7357,7 @@ def main():
     # Configure Streamlit page
     st.set_page_config(
         page_title="Snowflake Cost Dashboard",
-        page_icon="❄️",
+        page_icon="",
         layout="wide",
         initial_sidebar_state="expanded"
     )
