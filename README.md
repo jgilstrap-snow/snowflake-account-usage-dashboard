@@ -2,7 +2,7 @@
 
 A comprehensive Streamlit application for monitoring and analyzing Snowflake account usage costs across different service types with advanced projection capabilities and granular consumption analysis.
 
-<img width="3284" height="1812" alt="Snowflake Cost Dashboard" src="https://github.com/user-attachments/assets/70bcc2e6-f6db-456f-838e-5a2d09dc37ba" />
+<img width="3288" height="1900" alt="image" src="https://github.com/user-attachments/assets/ef80d42d-888f-4b43-b7e5-a7ae8c955f24" />
 
 ## Updates
 3/3/26 - Added Snowflake Intelligence and Cortex Agents usage tracking, Cost per Credit ($) input for accurate cost calculations
