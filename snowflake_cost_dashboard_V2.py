@@ -5178,10 +5178,11 @@ class AIServicesAnalyzer:
         # Track if any data exists
         has_any_data = False
         
-        # 1. Account-Level AI Services
+        # 1. Account-Level AI Services (also fetch REST API data for combined view)
         account_data = self._get_account_level_data()
+        rest_api_data = self._get_cortex_rest_api_data()
         if account_data is not None and not account_data.empty:
-            self._render_account_level_section(account_data)
+            self._render_account_level_section(account_data, rest_api_data)
             has_any_data = True
         else:
             self._handle_no_data("Account-Level AI Services")
@@ -5234,8 +5235,7 @@ class AIServicesAnalyzer:
         else:
             self._handle_no_data("Fine-Tuning")
         
-        # 8. Cortex REST API
-        rest_api_data = self._get_cortex_rest_api_data()
+        # 8. Cortex REST API (reuse data fetched earlier)
         if rest_api_data is not None and not rest_api_data.empty:
             self._render_cortex_rest_api_section(rest_api_data)
             has_any_data = True
@@ -5313,19 +5313,55 @@ class AIServicesAnalyzer:
             st.error(f"Error querying Account-Level AI Services data: {str(e)}")
             return None
     
-    def _render_account_level_section(self, data: pd.DataFrame) -> None:
+    def _render_account_level_section(self, data: pd.DataFrame, rest_api_data: Optional[pd.DataFrame] = None) -> None:
         """
         Render account-level AI services summary section with metrics, trends, and data table.
         
         Displays:
         - Section header with date range
-        - Three key metrics: Total Credits, Daily Average, Last 30 Days
-        - Line chart showing credit consumption over time
-        - Sortable data table with daily details
+        - Key metrics: Total AI Services Cost, REST API Cost, Combined Total
+        - Stacked bar chart showing daily AI Services (credits→$) and REST API ($)
         
         Args:
             data: DataFrame with columns SERVICE_TYPE, USAGE_DATE, CREDITS_USED
+            rest_api_data: Optional DataFrame with REST API usage data
         """
+        credit_price = st.session_state.get('credit_price', 4.0)
+        
+        MODEL_PRICING_INPUT = {
+            'mistral-7b': 0.15, 'mistral-large': 4.00, 'mistral-large2': 2.00,
+            'llama3.1-8b': 0.22, 'llama3.1-70b': 0.72, 'llama3.1-405b': 2.40,
+            'llama3.2-1b': 0.10, 'llama3.2-3b': 0.15, 'llama3.3-70b': 0.72,
+            'llama4-maverick': 0.24, 'snowflake-llama-3.3-70b': 0.72,
+            'claude-3-5-sonnet': 3.00, 'claude-4-opus': 15.00, 'claude-4-sonnet': 3.00,
+            'claude-sonnet-4-5': 3.00, 'claude-sonnet-4-6': 3.00,
+            'claude-haiku-4-5': 1.00, 'claude-opus-4-5': 5.00, 'claude-opus-4-6': 5.00,
+            'deepseek-r1': 1.35, 'openai-gpt-4.1': 2.00, 'openai-gpt-5': 1.25,
+            'openai-gpt-5-mini': 0.28, 'openai-gpt-5-nano': 0.06,
+            'openai-gpt-5.1': 1.25, 'openai-gpt-5.2': 1.75, 'openai-o4-mini': 1.10,
+        }
+        MODEL_PRICING_OUTPUT = {
+            'mistral-7b': 0.20, 'mistral-large': 12.00, 'mistral-large2': 6.00,
+            'llama3.1-8b': 0.22, 'llama3.1-70b': 0.72, 'llama3.1-405b': 2.40,
+            'llama3.2-1b': 0.10, 'llama3.2-3b': 0.15, 'llama3.3-70b': 0.72,
+            'llama4-maverick': 0.97, 'snowflake-llama-3.3-70b': 0.72,
+            'claude-3-5-sonnet': 15.00, 'claude-4-opus': 75.00, 'claude-4-sonnet': 15.00,
+            'claude-sonnet-4-5': 15.00, 'claude-sonnet-4-6': 15.00,
+            'claude-haiku-4-5': 5.00, 'claude-opus-4-5': 25.00, 'claude-opus-4-6': 25.00,
+            'deepseek-r1': 5.40, 'openai-gpt-4.1': 8.00, 'openai-gpt-5': 10.00,
+            'openai-gpt-5-mini': 2.20, 'openai-gpt-5-nano': 0.44,
+            'openai-gpt-5.1': 10.00, 'openai-gpt-5.2': 14.00, 'openai-o4-mini': 4.40,
+        }
+        DEFAULT_INPUT_PRICE = 0.50
+        DEFAULT_OUTPUT_PRICE = 1.00
+        
+        def get_price(model_name, pricing_dict, default):
+            model_lower = str(model_name).lower()
+            for key, price in pricing_dict.items():
+                if key in model_lower:
+                    return price
+            return default
+        
         # Section header
         st.markdown("---")
         st.markdown("#### Account-Level AI Services")
@@ -5336,46 +5372,85 @@ class AIServicesAnalyzer:
             max_date = data['USAGE_DATE'].max()
             st.caption(f"Data from {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}")
         
-        # Calculate metrics
+        # Calculate AI Services metrics (credits-based)
         total_credits = data['CREDITS_USED'].sum()
-        num_days = len(data)
-        daily_avg = total_credits / num_days if num_days > 0 else 0
+        ai_services_cost = total_credits * credit_price
         
-        # Last 30 days
-        last_30_days = data.head(30) if len(data) >= 30 else data
-        last_30_credits = last_30_days['CREDITS_USED'].sum()
+        # Calculate REST API cost (dollar-based)
+        rest_api_cost = 0.0
+        rest_api_daily = pd.DataFrame()
+        if rest_api_data is not None and not rest_api_data.empty:
+            rest_df = rest_api_data.copy()
+            rest_df['MODEL_NAME'] = rest_df['MODEL_NAME'].fillna('unknown').astype(str)
+            for col in ['INPUT_TOKENS', 'OUTPUT_TOKENS', 'CACHE_READ_TOKENS', 'CACHE_WRITE_TOKENS']:
+                if col in rest_df.columns:
+                    rest_df[col] = pd.to_numeric(rest_df[col], errors='coerce').fillna(0)
+            
+            rest_df['INPUT_COST'] = rest_df.apply(
+                lambda r: (r['INPUT_TOKENS'] / 1_000_000) * get_price(r['MODEL_NAME'], MODEL_PRICING_INPUT, DEFAULT_INPUT_PRICE), axis=1)
+            rest_df['OUTPUT_COST'] = rest_df.apply(
+                lambda r: (r['OUTPUT_TOKENS'] / 1_000_000) * get_price(r['MODEL_NAME'], MODEL_PRICING_OUTPUT, DEFAULT_OUTPUT_PRICE), axis=1)
+            rest_df['TOTAL_COST'] = rest_df['INPUT_COST'] + rest_df['OUTPUT_COST']
+            rest_api_cost = rest_df['TOTAL_COST'].sum()
+            
+            # Aggregate by date for chart
+            if 'START_TIME' in rest_df.columns:
+                rest_df['DATE'] = pd.to_datetime(rest_df['START_TIME']).dt.date
+                rest_api_daily = rest_df.groupby('DATE').agg({'TOTAL_COST': 'sum'}).reset_index()
+                rest_api_daily.columns = ['DATE', 'REST_API_COST']
+        
+        combined_cost = ai_services_cost + rest_api_cost
         
         # Display metrics
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Total Credits", self._format_credits(total_credits))
+            st.metric("AI Services", f"${ai_services_cost:,.2f}", help=f"{total_credits:,.2f} credits × ${credit_price}")
         with col2:
-            st.metric("Daily Average", self._format_credits(daily_avg))
+            st.metric("REST API", f"${rest_api_cost:,.2f}", help="Billed in $ per million tokens")
         with col3:
-            st.metric("Last 30 Days", self._format_credits(last_30_credits))
+            st.metric("Combined Total", f"${combined_cost:,.2f}")
         
-        # Line chart - Credits over time
-        st.markdown("##### Credit Consumption Trend")
+        # Stacked bar chart - Cost over time
+        st.markdown("##### Daily Cost Trend (AI Services + REST API)")
         
-        # Sort by date for proper line chart
-        chart_data = data.sort_values('USAGE_DATE')
+        # Prepare AI Services daily data
+        chart_data = data.copy()
+        chart_data['DATE'] = pd.to_datetime(chart_data['USAGE_DATE']).dt.date
+        chart_data['AI_SERVICES_COST'] = chart_data['CREDITS_USED'] * credit_price
+        ai_daily = chart_data.groupby('DATE').agg({'AI_SERVICES_COST': 'sum'}).reset_index()
+        
+        # Merge with REST API daily
+        if not rest_api_daily.empty:
+            merged = pd.merge(ai_daily, rest_api_daily, on='DATE', how='outer').fillna(0)
+        else:
+            merged = ai_daily.copy()
+            merged['REST_API_COST'] = 0
+        
+        merged = merged.sort_values('DATE')
         
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=chart_data['USAGE_DATE'],
-            y=chart_data['CREDITS_USED'],
-            mode='lines+markers',
-            name='Credits Used',
-            line=dict(color='#1f77b4', width=2),
-            marker=dict(size=6)
+        fig.add_trace(go.Bar(
+            x=merged['DATE'],
+            y=merged['AI_SERVICES_COST'],
+            name='AI Services (Credits)',
+            marker_color='#1f77b4',
+            hovertemplate='AI Services: $%{y:,.2f}<extra></extra>'
+        ))
+        fig.add_trace(go.Bar(
+            x=merged['DATE'],
+            y=merged['REST_API_COST'],
+            name='REST API (Direct $)',
+            marker_color='#ff7f0e',
+            hovertemplate='REST API: $%{y:,.2f}<extra></extra>'
         ))
         
         fig.update_layout(
+            barmode='stack',
             xaxis_title="Date",
-            yaxis_title="Credits Used",
+            yaxis_title="Cost ($)",
             hovermode='x unified',
             height=400,
-            showlegend=False,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             margin=dict(l=0, r=0, t=30, b=0)
         )
         
@@ -5384,6 +5459,11 @@ class AIServicesAnalyzer:
     def _get_snowflake_intelligence_data(self) -> Optional[pd.DataFrame]:
         """
         Retrieve Snowflake Intelligence usage data from SNOWFLAKE_INTELLIGENCE_USAGE_HISTORY.
+        
+        Includes TOKENS_GRANULAR and CREDITS_GRANULAR which contain nested breakdown by:
+        - Service type (cortex_agents for orchestration, cortex_analyst for Analyst calls)
+        - Model name
+        - Token type (input, output, cache_read_input, cache_write_input)
         """
         query = """
         SELECT 
@@ -5394,7 +5474,9 @@ class AIServicesAnalyzer:
             SNOWFLAKE_INTELLIGENCE_NAME,
             AGENT_NAME,
             TOKEN_CREDITS,
-            TOKENS
+            TOKENS,
+            TOKENS_GRANULAR::VARCHAR as TOKENS_GRANULAR,
+            CREDITS_GRANULAR::VARCHAR as CREDITS_GRANULAR
         FROM SNOWFLAKE.ACCOUNT_USAGE.SNOWFLAKE_INTELLIGENCE_USAGE_HISTORY
         WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
         ORDER BY START_TIME DESC
@@ -5408,16 +5490,90 @@ class AIServicesAnalyzer:
         except Exception as e:
             return None
     
+    def _parse_si_granular_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Parse TOKENS_GRANULAR and CREDITS_GRANULAR from Snowflake Intelligence data.
+        
+        Returns DataFrame with columns: Service, Model, Input Tokens, Output Tokens,
+        Cache Read Tokens, Cache Write Tokens, Input Credits, Output Credits,
+        Cache Read Credits, Cache Write Credits
+        """
+        import json
+        
+        records = []
+        for _, row in data.iterrows():
+            tokens_raw = row.get('TOKENS_GRANULAR')
+            credits_raw = row.get('CREDITS_GRANULAR')
+            
+            if not tokens_raw or tokens_raw == 'null':
+                continue
+                
+            try:
+                tokens_list = json.loads(tokens_raw) if isinstance(tokens_raw, str) else tokens_raw
+                credits_list = json.loads(credits_raw) if isinstance(credits_raw, str) else credits_raw
+                
+                if not isinstance(tokens_list, list):
+                    continue
+                    
+                credits_by_req = {}
+                if isinstance(credits_list, list):
+                    for item in credits_list:
+                        if isinstance(item, dict):
+                            for req_id, req_data in item.items():
+                                credits_by_req[req_id] = req_data
+                
+                for item in tokens_list:
+                    if not isinstance(item, dict):
+                        continue
+                    for req_id, req_data in item.items():
+                        if req_id == 'start_time' or not isinstance(req_data, dict):
+                            continue
+                        for service, service_data in req_data.items():
+                            if service == 'start_time' or not isinstance(service_data, dict):
+                                continue
+                            for model, model_data in service_data.items():
+                                if not isinstance(model_data, dict):
+                                    continue
+                                    
+                                credit_data = {}
+                                if req_id in credits_by_req:
+                                    req_credits = credits_by_req[req_id]
+                                    if service in req_credits and model in req_credits[service]:
+                                        credit_data = req_credits[service][model]
+                                
+                                records.append({
+                                    'Service': 'Orchestration' if service == 'cortex_agents' else 'Cortex Analyst',
+                                    'Model': model,
+                                    'Input Tokens': model_data.get('input', 0),
+                                    'Output Tokens': model_data.get('output', 0),
+                                    'Cache Read Tokens': model_data.get('cache_read_input', 0),
+                                    'Cache Write Tokens': model_data.get('cache_write_input', 0),
+                                    'Input Credits': credit_data.get('input', 0),
+                                    'Output Credits': credit_data.get('output', 0),
+                                    'Cache Read Credits': credit_data.get('cache_read_input', 0),
+                                    'Cache Write Credits': credit_data.get('cache_write_input', 0),
+                                })
+            except (json.JSONDecodeError, TypeError, KeyError):
+                continue
+        
+        if not records:
+            return pd.DataFrame()
+            
+        return pd.DataFrame(records)
+    
     def _render_snowflake_intelligence_section(self, data: pd.DataFrame) -> None:
         """
         Render Snowflake Intelligence section with metrics, charts, and data table.
+        
+        Shows breakdown by:
+        - Service type: Orchestration (cortex_agents) vs Cortex Analyst calls
+        - Model and token type (input/output/cache_read/cache_write)
+        
+        Pricing: Table 6(d) for orchestration, Table 6(f) for Cortex Analyst via SI
         """
         st.markdown("---")
         st.markdown("#### Snowflake Intelligence")
-        st.caption(
-            "ⓘ Pricing: Billed in credits based on token usage. Includes Cortex Analyst calls "
-            "via Snowflake Intelligence. See Credit Consumption Table 6(f) for rates."
-        )
+        st.caption("Billed in credits per million tokens. Orchestration = Table 6(d), Cortex Analyst = Table 6(f)")
         
         if not data.empty and 'START_TIME' in data.columns:
             min_date = data['START_TIME'].min()
@@ -5430,7 +5586,6 @@ class AIServicesAnalyzer:
         total_cost = total_credits * credit_price
         total_tokens = data['TOKENS'].sum()
         request_count = len(data)
-        unique_users = data['USER_NAME'].nunique()
         unique_agents = data['AGENT_NAME'].nunique()
         
         col1, col2, col3, col4 = st.columns(4)
@@ -5443,56 +5598,133 @@ class AIServicesAnalyzer:
         with col4:
             st.metric("Unique Agents", f"{unique_agents}")
         
-        agent_agg = data.groupby('AGENT_NAME').agg({
-            'TOKEN_CREDITS': 'sum',
-            'TOKENS': 'sum',
-            'REQUEST_ID': 'count'
-        }).reset_index()
-        agent_agg.columns = ['Agent', 'Credits', 'Tokens', 'Requests']
-        agent_agg['Cost'] = agent_agg['Credits'] * credit_price
-        agent_agg = agent_agg.sort_values('Cost', ascending=True)
-        agent_agg['Agent'] = agent_agg['Agent'].fillna('Unknown')
-        agent_agg.loc[agent_agg['Agent'] == '', 'Agent'] = 'Unknown'
+        granular_df = self._parse_si_granular_data(data)
         
-        st.markdown("##### Cost by Agent")
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            y=agent_agg['Agent'],
-            x=agent_agg['Cost'],
-            orientation='h',
-            marker=dict(color='#9467bd'),
-            text=[f"${v:,.2f}" for v in agent_agg['Cost']],
-            textposition='auto'
-        ))
-        
-        fig.update_layout(
-            xaxis_title="Cost ($)",
-            yaxis_title="Agent",
-            height=max(300, len(agent_agg) * 40),
-            showlegend=False,
-            margin=dict(l=0, r=0, t=10, b=0)
-        )
-        
-        render_plotly_chart(fig)
-        
-        st.markdown("##### Usage Details")
-        display_df = agent_agg.copy()
-        display_df = display_df.sort_values('Cost', ascending=False)
-        display_df['Tokens'] = display_df['Tokens'].apply(lambda x: f"{x:,.0f}")
-        display_df['Credits'] = display_df['Credits'].apply(lambda x: f"{x:,.4f}")
-        display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
-        display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
-        
-        st.dataframe(
-            display_df[['Agent', 'Requests', 'Tokens', 'Credits', 'Cost']],
-            use_container_width=True,
-            hide_index=True,
-            height=min(400, len(display_df) * 35 + 50)
-        )
+        if not granular_df.empty:
+            service_agg = granular_df.groupby('Service').agg({
+                'Input Tokens': 'sum',
+                'Output Tokens': 'sum',
+                'Cache Read Tokens': 'sum',
+                'Cache Write Tokens': 'sum',
+                'Input Credits': 'sum',
+                'Output Credits': 'sum',
+                'Cache Read Credits': 'sum',
+                'Cache Write Credits': 'sum',
+            }).reset_index()
+            service_agg['Total Credits'] = (service_agg['Input Credits'] + service_agg['Output Credits'] + 
+                                            service_agg['Cache Read Credits'] + service_agg['Cache Write Credits'])
+            service_agg['Total Cost'] = service_agg['Total Credits'] * credit_price
+            
+            st.markdown("##### Cost by Service Type")
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=service_agg['Service'],
+                x=service_agg['Total Cost'],
+                orientation='h',
+                marker=dict(color='#9467bd'),
+                text=[f"${v:,.2f}" for v in service_agg['Total Cost']],
+                textposition='auto'
+            ))
+            fig.update_layout(
+                xaxis_title="Cost ($)",
+                yaxis_title="Service",
+                height=200,
+                showlegend=False,
+                margin=dict(l=0, r=0, t=10, b=0)
+            )
+            render_plotly_chart(fig)
+            
+            model_agg = granular_df.groupby(['Service', 'Model']).agg({
+                'Input Tokens': 'sum',
+                'Output Tokens': 'sum',
+                'Cache Read Tokens': 'sum',
+                'Cache Write Tokens': 'sum',
+                'Input Credits': 'sum',
+                'Output Credits': 'sum',
+                'Cache Read Credits': 'sum',
+                'Cache Write Credits': 'sum',
+            }).reset_index()
+            model_agg['Total Credits'] = (model_agg['Input Credits'] + model_agg['Output Credits'] + 
+                                          model_agg['Cache Read Credits'] + model_agg['Cache Write Credits'])
+            model_agg['Total Cost'] = model_agg['Total Credits'] * credit_price
+            model_agg = model_agg.sort_values('Total Cost', ascending=False)
+            
+            st.markdown("##### Usage by Service and Model")
+            display_df = model_agg.copy()
+            display_df['Input (M)'] = display_df['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
+            display_df['Output (M)'] = display_df['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
+            display_df['Cache Read (M)'] = display_df.apply(
+                lambda row: f"{row['Cache Read Tokens']/1_000_000:,.4f}" if row['Cache Read Tokens'] > 0 else "", axis=1)
+            display_df['Cache Write (M)'] = display_df.apply(
+                lambda row: f"{row['Cache Write Tokens']/1_000_000:,.4f}" if row['Cache Write Tokens'] > 0 else "", axis=1)
+            display_df['Input Cost'] = display_df['Input Credits'].apply(lambda x: f"${x * credit_price:,.2f}" if x > 0 else "")
+            display_df['Output Cost'] = display_df['Output Credits'].apply(lambda x: f"${x * credit_price:,.2f}" if x > 0 else "")
+            display_df['Cache Read Cost'] = display_df['Cache Read Credits'].apply(lambda x: f"${x * credit_price:,.2f}" if x > 0 else "")
+            display_df['Cache Write Cost'] = display_df['Cache Write Credits'].apply(lambda x: f"${x * credit_price:,.2f}" if x > 0 else "")
+            display_df['Total Credits'] = display_df['Total Credits'].apply(lambda x: f"{x:,.4f}")
+            display_df['Total Cost'] = display_df['Total Cost'].apply(lambda x: f"${x:,.2f}")
+            
+            cols_to_show = ['Service', 'Model', 'Input (M)', 'Output (M)', 'Cache Read (M)', 'Cache Write (M)',
+                           'Input Cost', 'Output Cost', 'Cache Read Cost', 'Cache Write Cost', 'Total Credits', 'Total Cost']
+            
+            st.dataframe(
+                display_df[cols_to_show],
+                use_container_width=True,
+                hide_index=True,
+                height=min(400, len(display_df) * 35 + 50)
+            )
+
+        else:
+            agent_agg = data.groupby('AGENT_NAME').agg({
+                'TOKEN_CREDITS': 'sum',
+                'TOKENS': 'sum',
+                'REQUEST_ID': 'count'
+            }).reset_index()
+            agent_agg.columns = ['Agent', 'Credits', 'Tokens', 'Requests']
+            agent_agg['Cost'] = agent_agg['Credits'] * credit_price
+            agent_agg = agent_agg.sort_values('Cost', ascending=True)
+            agent_agg['Agent'] = agent_agg['Agent'].fillna('Unknown')
+            agent_agg.loc[agent_agg['Agent'] == '', 'Agent'] = 'Unknown'
+            
+            st.markdown("##### Cost by Agent")
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=agent_agg['Agent'],
+                x=agent_agg['Cost'],
+                orientation='h',
+                marker=dict(color='#9467bd'),
+                text=[f"${v:,.2f}" for v in agent_agg['Cost']],
+                textposition='auto'
+            ))
+            fig.update_layout(
+                xaxis_title="Cost ($)",
+                yaxis_title="Agent",
+                height=max(300, len(agent_agg) * 40),
+                showlegend=False,
+                margin=dict(l=0, r=0, t=10, b=0)
+            )
+            render_plotly_chart(fig)
+            
+            st.markdown("##### Usage Details")
+            display_df = agent_agg.copy()
+            display_df = display_df.sort_values('Cost', ascending=False)
+            display_df['Tokens'] = display_df['Tokens'].apply(lambda x: f"{x:,.0f}")
+            display_df['Credits'] = display_df['Credits'].apply(lambda x: f"{x:,.4f}")
+            display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
+            display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
+            
+            st.dataframe(
+                display_df[['Agent', 'Requests', 'Tokens', 'Credits', 'Cost']],
+                use_container_width=True,
+                hide_index=True,
+                height=min(400, len(display_df) * 35 + 50)
+            )
     
     def _get_cortex_agents_data(self) -> Optional[pd.DataFrame]:
         """
         Retrieve Cortex Agents usage data from CORTEX_AGENT_USAGE_HISTORY.
+        
+        Includes TOKENS_GRANULAR and CREDITS_GRANULAR for breakdown by model and token type.
         """
         query = """
         SELECT 
@@ -5504,7 +5736,9 @@ class AIServicesAnalyzer:
             AGENT_SCHEMA_NAME,
             AGENT_NAME,
             TOKEN_CREDITS,
-            TOKENS
+            TOKENS,
+            TOKENS_GRANULAR::VARCHAR as TOKENS_GRANULAR,
+            CREDITS_GRANULAR::VARCHAR as CREDITS_GRANULAR
         FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_AGENT_USAGE_HISTORY
         WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
         ORDER BY START_TIME DESC
@@ -5518,16 +5752,94 @@ class AIServicesAnalyzer:
         except Exception as e:
             return None
     
+    def _parse_ca_granular_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Parse TOKENS_GRANULAR and CREDITS_GRANULAR from Cortex Agents data.
+        Similar to SI parser but with cortex_agents service type.
+        """
+        import json
+        
+        records = []
+        for _, row in data.iterrows():
+            tokens_raw = row.get('TOKENS_GRANULAR')
+            credits_raw = row.get('CREDITS_GRANULAR')
+            agent_name = row.get('AGENT_NAME', 'Unknown') or 'Unknown'
+            
+            if not tokens_raw or tokens_raw == 'null':
+                continue
+                
+            try:
+                tokens_list = json.loads(tokens_raw) if isinstance(tokens_raw, str) else tokens_raw
+                credits_list = json.loads(credits_raw) if isinstance(credits_raw, str) else credits_raw
+                
+                if not isinstance(tokens_list, list):
+                    continue
+                    
+                credits_by_req = {}
+                if isinstance(credits_list, list):
+                    for item in credits_list:
+                        if isinstance(item, dict):
+                            for req_id, req_data in item.items():
+                                credits_by_req[req_id] = req_data
+                
+                for item in tokens_list:
+                    if not isinstance(item, dict):
+                        continue
+                    for req_id, req_data in item.items():
+                        if req_id == 'start_time' or not isinstance(req_data, dict):
+                            continue
+                        for service, service_data in req_data.items():
+                            if service == 'start_time' or not isinstance(service_data, dict):
+                                continue
+                            for model, model_data in service_data.items():
+                                if not isinstance(model_data, dict):
+                                    continue
+                                    
+                                credit_data = {}
+                                if req_id in credits_by_req:
+                                    req_credits = credits_by_req[req_id]
+                                    if service in req_credits and model in req_credits[service]:
+                                        credit_data = req_credits[service][model]
+                                
+                                service_label = 'Orchestration'
+                                if service == 'cortex_analyst':
+                                    service_label = 'Cortex Analyst'
+                                elif service == 'cortex_search':
+                                    service_label = 'Cortex Search'
+                                
+                                records.append({
+                                    'Agent': agent_name,
+                                    'Service': service_label,
+                                    'Model': model,
+                                    'Input Tokens': model_data.get('input', 0),
+                                    'Output Tokens': model_data.get('output', 0),
+                                    'Cache Read Tokens': model_data.get('cache_read_input', 0),
+                                    'Cache Write Tokens': model_data.get('cache_write_input', 0),
+                                    'Input Credits': credit_data.get('input', 0),
+                                    'Output Credits': credit_data.get('output', 0),
+                                    'Cache Read Credits': credit_data.get('cache_read_input', 0),
+                                    'Cache Write Credits': credit_data.get('cache_write_input', 0),
+                                })
+            except (json.JSONDecodeError, TypeError, KeyError):
+                continue
+        
+        if not records:
+            return pd.DataFrame()
+            
+        return pd.DataFrame(records)
+    
     def _render_cortex_agents_section(self, data: pd.DataFrame) -> None:
         """
         Render Cortex Agents section with metrics, charts, and data table.
+        
+        Shows breakdown by service type (Orchestration, Cortex Analyst, Cortex Search)
+        and model with token type granularity.
+        
+        Pricing: Table 6(e) for orchestration, Table 6(f) for Cortex Analyst via Agents
         """
         st.markdown("---")
         st.markdown("#### Cortex Agents")
-        st.caption(
-            "ⓘ Pricing: Billed in credits based on token usage. Includes orchestration and tool calls "
-            "(e.g., Cortex Analyst, Cortex Search). See Credit Consumption Table 6(e) for rates."
-        )
+        st.caption("Billed in credits per million tokens. Orchestration = Table 6(e), Cortex Analyst = Table 6(f)")
         
         if not data.empty and 'START_TIME' in data.columns:
             min_date = data['START_TIME'].min()
@@ -5540,7 +5852,6 @@ class AIServicesAnalyzer:
         total_cost = total_credits * credit_price
         total_tokens = data['TOKENS'].sum()
         request_count = len(data)
-        unique_users = data['USER_NAME'].nunique()
         unique_agents = data['AGENT_NAME'].nunique()
         
         col1, col2, col3, col4 = st.columns(4)
@@ -5553,54 +5864,129 @@ class AIServicesAnalyzer:
         with col4:
             st.metric("Unique Agents", f"{unique_agents}")
         
-        data = data.copy()
-        data['AGENT_NAME'] = data['AGENT_NAME'].fillna('Unknown')
-        data.loc[data['AGENT_NAME'] == '', 'AGENT_NAME'] = 'Unknown'
+        granular_df = self._parse_ca_granular_data(data)
         
-        agent_agg = data.groupby('AGENT_NAME').agg({
-            'TOKEN_CREDITS': 'sum',
-            'TOKENS': 'sum',
-            'REQUEST_ID': 'count'
-        }).reset_index()
-        agent_agg.columns = ['Agent', 'Credits', 'Tokens', 'Requests']
-        agent_agg['Cost'] = agent_agg['Credits'] * credit_price
-        agent_agg = agent_agg.sort_values('Cost', ascending=True)
-        
-        st.markdown("##### Cost by Agent")
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            y=agent_agg['Agent'],
-            x=agent_agg['Cost'],
-            orientation='h',
-            marker=dict(color='#2ca02c'),
-            text=[f"${v:,.2f}" for v in agent_agg['Cost']],
-            textposition='auto'
-        ))
-        
-        fig.update_layout(
-            xaxis_title="Cost ($)",
-            yaxis_title="Agent",
-            height=max(300, len(agent_agg) * 40),
-            showlegend=False,
-            margin=dict(l=0, r=0, t=10, b=0)
-        )
-        
-        render_plotly_chart(fig)
-        
-        st.markdown("##### Usage Details")
-        display_df = agent_agg.copy()
-        display_df = display_df.sort_values('Cost', ascending=False)
-        display_df['Tokens'] = display_df['Tokens'].apply(lambda x: f"{x:,.0f}")
-        display_df['Credits'] = display_df['Credits'].apply(lambda x: f"{x:,.4f}")
-        display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
-        display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
-        
-        st.dataframe(
-            display_df[['Agent', 'Requests', 'Tokens', 'Credits', 'Cost']],
-            use_container_width=True,
-            hide_index=True,
-            height=min(400, len(display_df) * 35 + 50)
-        )
+        if not granular_df.empty:
+            service_agg = granular_df.groupby('Service').agg({
+                'Input Tokens': 'sum',
+                'Output Tokens': 'sum',
+                'Cache Read Tokens': 'sum',
+                'Cache Write Tokens': 'sum',
+                'Input Credits': 'sum',
+                'Output Credits': 'sum',
+                'Cache Read Credits': 'sum',
+                'Cache Write Credits': 'sum',
+            }).reset_index()
+            service_agg['Total Credits'] = (service_agg['Input Credits'] + service_agg['Output Credits'] + 
+                                            service_agg['Cache Read Credits'] + service_agg['Cache Write Credits'])
+            service_agg['Total Cost'] = service_agg['Total Credits'] * credit_price
+            
+            st.markdown("##### Cost by Service Type")
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=service_agg['Service'],
+                x=service_agg['Total Cost'],
+                orientation='h',
+                marker=dict(color='#2ca02c'),
+                text=[f"${v:,.2f}" for v in service_agg['Total Cost']],
+                textposition='auto'
+            ))
+            fig.update_layout(
+                xaxis_title="Cost ($)",
+                yaxis_title="Service",
+                height=200,
+                showlegend=False,
+                margin=dict(l=0, r=0, t=10, b=0)
+            )
+            render_plotly_chart(fig)
+            
+            model_agg = granular_df.groupby(['Service', 'Model']).agg({
+                'Input Tokens': 'sum',
+                'Output Tokens': 'sum',
+                'Cache Read Tokens': 'sum',
+                'Cache Write Tokens': 'sum',
+                'Input Credits': 'sum',
+                'Output Credits': 'sum',
+                'Cache Read Credits': 'sum',
+                'Cache Write Credits': 'sum',
+            }).reset_index()
+            model_agg['Total Credits'] = (model_agg['Input Credits'] + model_agg['Output Credits'] + 
+                                          model_agg['Cache Read Credits'] + model_agg['Cache Write Credits'])
+            model_agg['Total Cost'] = model_agg['Total Credits'] * credit_price
+            model_agg = model_agg.sort_values('Total Cost', ascending=False)
+            
+            st.markdown("##### Usage by Service and Model")
+            display_df = model_agg.copy()
+            display_df['Input (M)'] = display_df['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
+            display_df['Output (M)'] = display_df['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
+            display_df['Cache Read (M)'] = display_df.apply(
+                lambda row: f"{row['Cache Read Tokens']/1_000_000:,.4f}" if row['Cache Read Tokens'] > 0 else "", axis=1)
+            display_df['Cache Write (M)'] = display_df.apply(
+                lambda row: f"{row['Cache Write Tokens']/1_000_000:,.4f}" if row['Cache Write Tokens'] > 0 else "", axis=1)
+            display_df['Input Cost'] = display_df['Input Credits'].apply(lambda x: f"${x * credit_price:,.2f}" if x > 0 else "")
+            display_df['Output Cost'] = display_df['Output Credits'].apply(lambda x: f"${x * credit_price:,.2f}" if x > 0 else "")
+            display_df['Cache Read Cost'] = display_df['Cache Read Credits'].apply(lambda x: f"${x * credit_price:,.2f}" if x > 0 else "")
+            display_df['Cache Write Cost'] = display_df['Cache Write Credits'].apply(lambda x: f"${x * credit_price:,.2f}" if x > 0 else "")
+            display_df['Total Credits'] = display_df['Total Credits'].apply(lambda x: f"{x:,.4f}")
+            display_df['Total Cost'] = display_df['Total Cost'].apply(lambda x: f"${x:,.2f}")
+            
+            cols_to_show = ['Service', 'Model', 'Input (M)', 'Output (M)', 'Cache Read (M)', 'Cache Write (M)',
+                           'Input Cost', 'Output Cost', 'Cache Read Cost', 'Cache Write Cost', 'Total Credits', 'Total Cost']
+            
+            st.dataframe(
+                display_df[cols_to_show],
+                use_container_width=True,
+                hide_index=True,
+                height=min(400, len(display_df) * 35 + 50)
+            )
+
+        else:
+            data = data.copy()
+            data['AGENT_NAME'] = data['AGENT_NAME'].fillna('Unknown')
+            data.loc[data['AGENT_NAME'] == '', 'AGENT_NAME'] = 'Unknown'
+            
+            agent_agg = data.groupby('AGENT_NAME').agg({
+                'TOKEN_CREDITS': 'sum',
+                'TOKENS': 'sum',
+                'REQUEST_ID': 'count'
+            }).reset_index()
+            agent_agg.columns = ['Agent', 'Credits', 'Tokens', 'Requests']
+            agent_agg['Cost'] = agent_agg['Credits'] * credit_price
+            agent_agg = agent_agg.sort_values('Cost', ascending=True)
+            
+            st.markdown("##### Cost by Agent")
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=agent_agg['Agent'],
+                x=agent_agg['Cost'],
+                orientation='h',
+                marker=dict(color='#2ca02c'),
+                text=[f"${v:,.2f}" for v in agent_agg['Cost']],
+                textposition='auto'
+            ))
+            fig.update_layout(
+                xaxis_title="Cost ($)",
+                yaxis_title="Agent",
+                height=max(300, len(agent_agg) * 40),
+                showlegend=False,
+                margin=dict(l=0, r=0, t=10, b=0)
+            )
+            render_plotly_chart(fig)
+            
+            st.markdown("##### Usage Details")
+            display_df = agent_agg.copy()
+            display_df = display_df.sort_values('Cost', ascending=False)
+            display_df['Tokens'] = display_df['Tokens'].apply(lambda x: f"{x:,.0f}")
+            display_df['Credits'] = display_df['Credits'].apply(lambda x: f"{x:,.4f}")
+            display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
+            display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
+            
+            st.dataframe(
+                display_df[['Agent', 'Requests', 'Tokens', 'Credits', 'Cost']],
+                use_container_width=True,
+                hide_index=True,
+                height=min(400, len(display_df) * 35 + 50)
+            )
     
     def _get_cortex_functions_data(self) -> Optional[pd.DataFrame]:
         """
@@ -5625,29 +6011,59 @@ class AIServicesAnalyzer:
                                    START_TIME, END_TIME, TOKEN_CREDITS,
                                    or None if query fails or no data exists
         """
-        query = """
+        query_old = """
         SELECT 
             FUNCTION_NAME,
             MODEL_NAME,
             START_TIME,
             END_TIME,
-            TOKEN_CREDITS
+            TOKEN_CREDITS as CREDITS,
+            'legacy' as SOURCE
         FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_FUNCTIONS_USAGE_HISTORY
         WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
-        ORDER BY START_TIME DESC
+        """
+        
+        query_new = """
+        SELECT 
+            FUNCTION_NAME,
+            MODEL_NAME,
+            START_TIME,
+            END_TIME,
+            CREDITS,
+            'current' as SOURCE
+        FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_AI_FUNCTIONS_USAGE_HISTORY
+        WHERE START_TIME >= DATEADD('month', -12, CURRENT_DATE())
         """
         
         try:
-            # Use cached query for better performance (1 hour cache)
-            cache_key = "ai_services_cortex_functions"
-            data = self.data_manager.get_cached_query_result(query, cache_key)
+            frames = []
             
-            if data is None or data.empty:
+            # Try old view
+            try:
+                cache_key_old = "ai_services_cortex_functions_old"
+                data_old = self.data_manager.get_cached_query_result(query_old, cache_key_old)
+                if data_old is not None and not data_old.empty:
+                    frames.append(data_old)
+            except Exception:
+                pass
+            
+            # Try new view
+            try:
+                cache_key_new = "ai_services_cortex_functions_new"
+                data_new = self.data_manager.get_cached_query_result(query_new, cache_key_new)
+                if data_new is not None and not data_new.empty:
+                    frames.append(data_new)
+            except Exception:
+                pass
+            
+            if not frames:
                 return None
             
-            # Handle NULL token_credits (convert to 0)
-            if 'TOKEN_CREDITS' in data.columns:
-                data['TOKEN_CREDITS'] = data['TOKEN_CREDITS'].fillna(0)
+            data = pd.concat(frames, ignore_index=True)
+            
+            # Handle NULL credits (convert to 0)
+            if 'CREDITS' in data.columns:
+                data['CREDITS'] = data['CREDITS'].fillna(0)
             
             # Handle timezone normalization for timestamp columns
             if 'START_TIME' in data.columns:
@@ -5656,10 +6072,9 @@ class AIServicesAnalyzer:
             if 'END_TIME' in data.columns:
                 data['END_TIME'] = pd.to_datetime(data['END_TIME']).dt.tz_localize(None)
             
-            return data
+            return data.sort_values('START_TIME', ascending=False)
             
         except Exception as e:
-            # View may not exist in some accounts
             st.warning(f"Cortex Functions data not available: {str(e)}")
             return None
     
@@ -5675,7 +6090,7 @@ class AIServicesAnalyzer:
         - Sortable data table with aggregated details
         
         Args:
-            data: DataFrame with columns FUNCTION_NAME, MODEL_NAME, TOKEN_CREDITS, START_TIME, END_TIME
+            data: DataFrame with columns FUNCTION_NAME, MODEL_NAME, CREDITS, START_TIME, END_TIME
         """
         # Section header
         st.markdown("---")
@@ -5688,7 +6103,7 @@ class AIServicesAnalyzer:
             st.caption(f"Data from {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}")
         
         # Calculate metrics
-        total_credits = data['TOKEN_CREDITS'].sum()
+        total_credits = data['CREDITS'].sum()
         unique_functions = data['FUNCTION_NAME'].nunique()
         
         # Display metrics
@@ -5702,15 +6117,15 @@ class AIServicesAnalyzer:
         func_data = data.copy()
         func_data['FUNCTION_NAME'] = func_data['FUNCTION_NAME'].astype(str).str.replace('"', '')
         function_agg = func_data.groupby('FUNCTION_NAME').agg({
-            'TOKEN_CREDITS': 'sum'
-        }).reset_index().sort_values('TOKEN_CREDITS', ascending=True)
+            'CREDITS': 'sum'
+        }).reset_index().sort_values('CREDITS', ascending=True)
         
         # Bar chart - Credits by Function Name
         st.markdown("##### Credits by Function Name")
         fig_func = go.Figure()
         fig_func.add_trace(go.Bar(
             y=function_agg['FUNCTION_NAME'],
-            x=function_agg['TOKEN_CREDITS'],
+            x=function_agg['CREDITS'],
             orientation='h',
             marker=dict(color='#1f77b4')
         ))
@@ -5734,15 +6149,15 @@ class AIServicesAnalyzer:
         model_data.loc[model_data['MODEL_NAME'] == 'None', 'MODEL_NAME'] = 'Various AI Functions'
         
         model_agg = model_data.groupby('MODEL_NAME').agg({
-            'TOKEN_CREDITS': 'sum'
-        }).reset_index().sort_values('TOKEN_CREDITS', ascending=True)
+            'CREDITS': 'sum'
+        }).reset_index().sort_values('CREDITS', ascending=True)
         
         # Bar chart - Credits by Model Name
         st.markdown("##### Credits by Model Name")
         fig_model = go.Figure()
         fig_model.add_trace(go.Bar(
             y=model_agg['MODEL_NAME'],
-            x=model_agg['TOKEN_CREDITS'],
+            x=model_agg['CREDITS'],
             orientation='h',
             marker=dict(color='#2ca02c')
         ))
@@ -5769,7 +6184,7 @@ class AIServicesAnalyzer:
         
         # Aggregate for table
         table_agg = table_data.groupby(['FUNCTION_NAME', 'MODEL_NAME']).agg({
-            'TOKEN_CREDITS': 'sum',
+            'CREDITS': 'sum',
             'START_TIME': ['min', 'max']
         }).reset_index()
         
@@ -6451,8 +6866,9 @@ class AIServicesAnalyzer:
         """
         Retrieve Cortex REST API usage data from CORTEX_REST_API_USAGE_HISTORY.
         
-        The Cortex REST API is billed based on tokens per model, with pricing
-        varying by model size. Pricing is in credits per million tokens.
+        The Cortex REST API is billed purely in dollars (not credits) per million tokens,
+        with different rates for input vs output tokens. See Table 6(b) in
+        Snowflake Credit Consumption Table.
         
         Returns:
             Optional[pd.DataFrame]: DataFrame with REST API usage data,
@@ -6465,6 +6881,10 @@ class AIServicesAnalyzer:
             REQUEST_ID,
             MODEL_NAME,
             TOKENS,
+            TOKENS_GRANULAR:input::NUMBER as INPUT_TOKENS,
+            TOKENS_GRANULAR:output::NUMBER as OUTPUT_TOKENS,
+            TOKENS_GRANULAR:cache_read::NUMBER as CACHE_READ_TOKENS,
+            TOKENS_GRANULAR:cache_write::NUMBER as CACHE_WRITE_TOKENS,
             USER_ID,
             INFERENCE_REGION
         FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_REST_API_USAGE_HISTORY
@@ -6481,43 +6901,104 @@ class AIServicesAnalyzer:
         """
         Render Cortex REST API section with metrics, charts, and data table.
         
-        The REST API is priced per million tokens with different rates per model.
-        Pricing reference: Snowflake Credit Consumption Table 6(b).
+        The REST API is priced purely in dollars (not credits) per million tokens,
+        with different rates for input vs output tokens.
+        Pricing reference: Snowflake Credit Consumption Table 6(b) and 6(c).
         
         Args:
-            data: DataFrame with columns MODEL_NAME, TOKENS, START_TIME, etc.
+            data: DataFrame with columns MODEL_NAME, INPUT_TOKENS, OUTPUT_TOKENS, etc.
         """
-        MODEL_PRICING = {
-            'mistral-7b': 0.12,
-            'gemma-7b': 0.12,
-            'llama3-8b': 0.19,
-            'llama3.1-8b': 0.19,
-            'llama3.2-1b': 0.05,
-            'llama3.2-3b': 0.07,
-            'mixtral-8x7b': 0.22,
-            'llama2-70b-chat': 0.45,
-            'llama3-70b': 0.85,
-            'llama3.1-70b': 1.21,
-            'llama3.3-70b': 1.21,
-            'mistral-large': 1.80,
-            'mistral-large2': 1.21,
-            'reka-flash': 0.45,
-            'reka-core': 3.0,
-            'jamba-instruct': 0.33,
-            'jamba-1.5-mini': 0.07,
-            'jamba-1.5-large': 0.45,
-            'llama-3.1-405b': 3.0,
-            'snowflake-arctic': 0.24,
-            'claude-3-5-sonnet': 5.4,
-            'claude-4-opus': 12.0,
-            'deepseek-r1': 4.0,
-            'openai-gpt-4o': 3.0,
-            'openai-gpt-4o-mini': 0.32,
+        MODEL_PRICING_INPUT = {
+            'mistral-7b': 0.15,
+            'mistral-large': 4.00,
+            'mistral-large2': 2.00,
+            'llama3.1-8b': 0.22,
+            'llama3.1-70b': 0.72,
+            'llama3.1-405b': 2.40,
+            'llama3.2-1b': 0.10,
+            'llama3.2-3b': 0.15,
+            'llama3.3-70b': 0.72,
+            'llama4-maverick': 0.24,
+            'snowflake-llama-3.3-70b': 0.72,
+            'claude-3-5-sonnet': 3.00,
+            'claude-4-opus': 15.00,
+            'claude-4-sonnet': 3.00,
+            'claude-sonnet-4-5': 3.00,
+            'claude-sonnet-4-6': 3.00,
+            'claude-haiku-4-5': 1.00,
+            'claude-opus-4-5': 5.00,
+            'claude-opus-4-6': 5.00,
+            'deepseek-r1': 1.35,
+            'openai-gpt-4.1': 2.00,
+            'openai-gpt-5': 1.25,
+            'openai-gpt-5-mini': 0.28,
+            'openai-gpt-5-nano': 0.06,
+            'openai-gpt-5.1': 1.25,
+            'openai-gpt-5.2': 1.75,
+            'openai-o4-mini': 1.10,
+            'openai-gpt-oss-120b': 0.15,
         }
-        DEFAULT_PRICING = 0.50
+        MODEL_PRICING_OUTPUT = {
+            'mistral-7b': 0.20,
+            'mistral-large': 12.00,
+            'mistral-large2': 6.00,
+            'llama3.1-8b': 0.22,
+            'llama3.1-70b': 0.72,
+            'llama3.1-405b': 2.40,
+            'llama3.2-1b': 0.10,
+            'llama3.2-3b': 0.15,
+            'llama3.3-70b': 0.72,
+            'llama4-maverick': 0.97,
+            'snowflake-llama-3.3-70b': 0.72,
+            'claude-3-5-sonnet': 15.00,
+            'claude-4-opus': 75.00,
+            'claude-4-sonnet': 15.00,
+            'claude-sonnet-4-5': 15.00,
+            'claude-sonnet-4-6': 15.00,
+            'claude-haiku-4-5': 5.00,
+            'claude-opus-4-5': 25.00,
+            'claude-opus-4-6': 25.00,
+            'deepseek-r1': 5.40,
+            'openai-gpt-4.1': 8.00,
+            'openai-gpt-5': 10.00,
+            'openai-gpt-5-mini': 2.20,
+            'openai-gpt-5-nano': 0.44,
+            'openai-gpt-5.1': 10.00,
+            'openai-gpt-5.2': 14.00,
+            'openai-o4-mini': 4.40,
+            'openai-gpt-oss-120b': 0.60,
+        }
+        MODEL_PRICING_CACHE_READ = {
+            'claude-4-opus': 1.50,
+            'claude-4-sonnet': 0.30,
+            'claude-sonnet-4-5': 0.30,
+            'claude-sonnet-4-6': 0.30,
+            'claude-haiku-4-5': 0.10,
+            'claude-opus-4-5': 0.50,
+            'claude-opus-4-6': 0.50,
+            'openai-gpt-4.1': 0.50,
+            'openai-gpt-5': 0.13,
+            'openai-gpt-5-mini': 0.03,
+            'openai-gpt-5-nano': 0.01,
+            'openai-gpt-5.1': 0.13,
+            'openai-gpt-5.2': 0.18,
+            'openai-o4-mini': 0.28,
+        }
+        MODEL_PRICING_CACHE_WRITE = {
+            'claude-4-opus': 18.75,
+            'claude-4-sonnet': 3.75,
+            'claude-sonnet-4-5': 3.75,
+            'claude-sonnet-4-6': 3.75,
+            'claude-haiku-4-5': 1.25,
+            'claude-opus-4-5': 6.25,
+            'claude-opus-4-6': 6.25,
+        }
+        DEFAULT_INPUT_PRICE = 0.50
+        DEFAULT_OUTPUT_PRICE = 1.00
         
         st.markdown("---")
         st.markdown("#### Cortex REST API")
+        st.caption("Billed in dollars per million tokens (not credits)")
         
         if not data.empty and 'START_TIME' in data.columns:
             min_date = data['START_TIME'].min()
@@ -6528,78 +7009,171 @@ class AIServicesAnalyzer:
         data['MODEL_NAME'] = data['MODEL_NAME'].fillna('unknown')
         data['MODEL_NAME'] = data['MODEL_NAME'].astype(str).str.replace('"', '')
         
-        def get_model_price(model_name):
+        for col in ['INPUT_TOKENS', 'OUTPUT_TOKENS', 'CACHE_READ_TOKENS', 'CACHE_WRITE_TOKENS']:
+            if col in data.columns:
+                data[col] = pd.to_numeric(data[col], errors='coerce').fillna(0)
+        
+        def get_input_price(model_name):
             model_lower = str(model_name).lower()
-            for key, price in MODEL_PRICING.items():
+            for key, price in MODEL_PRICING_INPUT.items():
                 if key in model_lower:
                     return price
-            return DEFAULT_PRICING
+            return DEFAULT_INPUT_PRICE
         
-        data['CREDITS_PER_M_TOKENS'] = data['MODEL_NAME'].apply(get_model_price)
-        data['CREDITS'] = (data['TOKENS'] / 1_000_000) * data['CREDITS_PER_M_TOKENS']
+        def get_output_price(model_name):
+            model_lower = str(model_name).lower()
+            for key, price in MODEL_PRICING_OUTPUT.items():
+                if key in model_lower:
+                    return price
+            return DEFAULT_OUTPUT_PRICE
         
-        credit_price = st.session_state.get('credit_price', 2.00)
+        def get_cache_read_price(model_name):
+            model_lower = str(model_name).lower()
+            for key, price in MODEL_PRICING_CACHE_READ.items():
+                if key in model_lower:
+                    return price
+            return 0
         
-        total_tokens = data['TOKENS'].sum()
-        total_credits = data['CREDITS'].sum()
-        total_cost = total_credits * credit_price
+        def get_cache_write_price(model_name):
+            model_lower = str(model_name).lower()
+            for key, price in MODEL_PRICING_CACHE_WRITE.items():
+                if key in model_lower:
+                    return price
+            return 0
+        
+        data['INPUT_COST'] = (data['INPUT_TOKENS'] / 1_000_000) * data['MODEL_NAME'].apply(get_input_price)
+        data['OUTPUT_COST'] = (data['OUTPUT_TOKENS'] / 1_000_000) * data['MODEL_NAME'].apply(get_output_price)
+        data['CACHE_READ_COST'] = (data['CACHE_READ_TOKENS'] / 1_000_000) * data['MODEL_NAME'].apply(get_cache_read_price)
+        data['CACHE_WRITE_COST'] = (data['CACHE_WRITE_TOKENS'] / 1_000_000) * data['MODEL_NAME'].apply(get_cache_write_price)
+        data['TOTAL_COST'] = data['INPUT_COST'] + data['OUTPUT_COST'] + data['CACHE_READ_COST'] + data['CACHE_WRITE_COST']
+        
+        total_input_tokens = data['INPUT_TOKENS'].sum()
+        total_output_tokens = data['OUTPUT_TOKENS'].sum()
+        total_cache_read_tokens = data['CACHE_READ_TOKENS'].sum()
+        total_cache_write_tokens = data['CACHE_WRITE_TOKENS'].sum()
+        total_cost = data['TOTAL_COST'].sum()
         unique_models = data['MODEL_NAME'].nunique()
         request_count = len(data)
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            if total_tokens >= 1_000_000:
-                st.metric("Total Tokens", f"{total_tokens/1_000_000:,.2f}M")
-            else:
-                st.metric("Total Tokens", f"{total_tokens:,.0f}")
-        with col2:
-            st.metric("Total Credits", f"{total_credits:,.4f}")
-        with col3:
             st.metric("Total Cost", f"${total_cost:,.2f}")
+        with col2:
+            st.metric("Input (M Tokens)", f"{total_input_tokens/1_000_000:,.4f}")
+        with col3:
+            st.metric("Output (M Tokens)", f"{total_output_tokens/1_000_000:,.4f}")
         with col4:
             st.metric("API Requests", f"{request_count:,}")
         
         model_agg = data.groupby('MODEL_NAME').agg({
-            'TOKENS': 'sum',
-            'CREDITS': 'sum',
+            'INPUT_TOKENS': 'sum',
+            'OUTPUT_TOKENS': 'sum',
+            'CACHE_READ_TOKENS': 'sum',
+            'CACHE_WRITE_TOKENS': 'sum',
+            'INPUT_COST': 'sum',
+            'OUTPUT_COST': 'sum',
+            'CACHE_READ_COST': 'sum',
+            'CACHE_WRITE_COST': 'sum',
+            'TOTAL_COST': 'sum',
             'REQUEST_ID': 'count'
         }).reset_index()
-        model_agg.columns = ['Model', 'Tokens', 'Credits', 'Requests']
-        model_agg['Cost'] = model_agg['Credits'] * credit_price
-        model_agg = model_agg.sort_values('Cost', ascending=True)
+        model_agg.columns = ['Model', 'Input Tokens', 'Output Tokens', 'Cache Read Tokens', 'Cache Write Tokens',
+                            'Input Cost', 'Output Cost', 'Cache Read Cost', 'Cache Write Cost', 'Total Cost', 'Requests']
+        model_agg = model_agg.sort_values('Total Cost', ascending=True)
         
-        st.markdown("##### Cost by Model")
+        st.markdown("##### Cost by Model (Input / Output / Cache)")
+        
         fig = go.Figure()
+        
         fig.add_trace(go.Bar(
             y=model_agg['Model'],
-            x=model_agg['Cost'],
+            x=model_agg['Input Cost'],
             orientation='h',
-            marker=dict(color='#17becf'),
-            text=[f"${v:,.2f}" for v in model_agg['Cost']],
-            textposition='auto'
+            name='Input',
+            marker=dict(color='#1f77b4'),
+            hovertemplate='<b>%{y}</b><br>Input: $%{x:,.4f}<extra></extra>'
         ))
         
+        fig.add_trace(go.Bar(
+            y=model_agg['Model'],
+            x=model_agg['Output Cost'],
+            orientation='h',
+            name='Output',
+            marker=dict(color='#ff7f0e'),
+            hovertemplate='<b>%{y}</b><br>Output: $%{x:,.4f}<extra></extra>'
+        ))
+        
+        if model_agg['Cache Read Cost'].sum() > 0:
+            fig.add_trace(go.Bar(
+                y=model_agg['Model'],
+                x=model_agg['Cache Read Cost'],
+                orientation='h',
+                name='Cache Read',
+                marker=dict(color='#2ca02c'),
+                hovertemplate='<b>%{y}</b><br>Cache Read: $%{x:,.4f}<extra></extra>'
+            ))
+        
+        if model_agg['Cache Write Cost'].sum() > 0:
+            fig.add_trace(go.Bar(
+                y=model_agg['Model'],
+                x=model_agg['Cache Write Cost'],
+                orientation='h',
+                name='Cache Write',
+                marker=dict(color='#d62728'),
+                hovertemplate='<b>%{y}</b><br>Cache Write: $%{x:,.4f}<extra></extra>'
+            ))
+        
         fig.update_layout(
+            barmode='stack',
             xaxis_title="Cost ($)",
             yaxis_title="Model",
             height=max(300, len(model_agg) * 40),
-            showlegend=False,
-            margin=dict(l=0, r=0, t=10, b=0)
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+            margin=dict(l=0, r=0, t=40, b=0)
         )
         
         render_plotly_chart(fig)
         
         st.markdown("##### REST API Usage Details")
+        st.caption("Cost = (Input Tokens / 1M) x Input Rate + (Output Tokens / 1M) x Output Rate + Cache costs. Pricing per Snowflake Table 6(b) and 6(c). Cache pricing applies to Claude and select OpenAI models.")
         
         display_df = model_agg.copy()
-        display_df = display_df.sort_values('Cost', ascending=False)
-        display_df['Tokens'] = display_df['Tokens'].apply(lambda x: f"{x:,.0f}")
-        display_df['Credits'] = display_df['Credits'].apply(lambda x: f"{x:,.4f}")
-        display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
+        display_df = display_df.sort_values('Total Cost', ascending=False)
+        
+        display_df['Input Rate'] = display_df['Model'].apply(lambda m: f"${get_input_price(m):,.2f}")
+        display_df['Output Rate'] = display_df['Model'].apply(lambda m: f"${get_output_price(m):,.2f}")
+        display_df['Cache Read (M)'] = display_df.apply(
+            lambda row: f"{row['Cache Read Tokens']/1_000_000:,.4f}" if get_cache_read_price(row['Model']) > 0 and row['Cache Read Tokens'] > 0 else "", axis=1
+        )
+        display_df['Cache Read Rate'] = display_df['Model'].apply(
+            lambda m: f"${get_cache_read_price(m):,.2f}" if get_cache_read_price(m) > 0 else ""
+        )
+        display_df['Cache Write (M)'] = display_df.apply(
+            lambda row: f"{row['Cache Write Tokens']/1_000_000:,.4f}" if get_cache_write_price(row['Model']) > 0 and row['Cache Write Tokens'] > 0 else "", axis=1
+        )
+        display_df['Cache Write Rate'] = display_df['Model'].apply(
+            lambda m: f"${get_cache_write_price(m):,.2f}" if get_cache_write_price(m) > 0 else ""
+        )
+        
+        display_df['Input (M)'] = display_df['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
+        display_df['Output (M)'] = display_df['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
+        display_df['Input Cost'] = display_df['Input Cost'].apply(lambda x: f"${x:,.4f}")
+        display_df['Output Cost'] = display_df['Output Cost'].apply(lambda x: f"${x:,.4f}")
+        display_df['Cache Read Cost'] = display_df.apply(
+            lambda row: f"${row['Cache Read Cost']:,.4f}" if row['Cache Read Cost'] > 0 else "", axis=1
+        )
+        display_df['Cache Write Cost'] = display_df.apply(
+            lambda row: f"${row['Cache Write Cost']:,.4f}" if row['Cache Write Cost'] > 0 else "", axis=1
+        )
+        display_df['Total Cost'] = display_df['Total Cost'].apply(lambda x: f"${x:,.4f}")
         display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
         
+        cols_to_show = ['Model', 'Requests', 'Input (M)', 'Input Rate', 'Output (M)', 'Output Rate', 
+                        'Cache Read (M)', 'Cache Read Rate', 'Cache Write (M)', 'Cache Write Rate', 
+                        'Input Cost', 'Output Cost', 'Cache Read Cost', 'Cache Write Cost', 'Total Cost']
+        
         st.dataframe(
-            display_df[['Model', 'Requests', 'Tokens', 'Credits', 'Cost']],
+            display_df[cols_to_show],
             use_container_width=True,
             hide_index=True,
             height=min(400, len(display_df) * 35 + 50)
