@@ -1,23 +1,25 @@
-# Snowflake Account Usage Dashboard
+# Snowflake Cost Dashboard
 
 A comprehensive Streamlit application for monitoring and analyzing Snowflake account usage costs across different service types with advanced projection capabilities and granular consumption analysis.
 
-<img width="3284" height="1812" alt="image" src="https://github.com/user-attachments/assets/babf6130-b0c0-4531-96fb-9d4e22f727af" />
+<img width="3284" height="1812" alt="Snowflake Cost Dashboard" src="https://github.com/user-attachments/assets/70bcc2e6-f6db-456f-838e-5a2d09dc37ba" />
 
 ## Updates
+3/3/26 - Added Snowflake Intelligence and Cortex Agents usage tracking, Cost per Credit ($) input for accurate cost calculations
+
 10/22 - Added `snowflake_cost_dashboard_V2.py` that includes a cache layer for the AI Services tab and speeds up subsequent page loads
 
 ## Features
 
-- **📊 Overview**: Account-wide cost summary with yearly projections and monthly trends
-- **💾 Storage**: Database, stage, and failsafe storage analysis
-- **💻 Warehouse Compute**: Credit consumption by warehouse with trend analysis
-- **☁️ Cloud Services**: Cloud services overhead monitoring and optimization insights
-- **🔄 Replication**: Replication credit tracking and data transfer analysis
-- **🔧 Clustering**: Automatic clustering cost analysis by table
-- **⚡ Serverless**: Serverless task execution monitoring
-- **🤖 AI Services**: Comprehensive AI services cost tracking (Cortex Functions, Analyst, Search, Document AI, Fine-Tuning)
-- **📱 Client Consumption**: Usage breakdown by client application
+- **Overview**: Account-wide cost summary with yearly projections and monthly trends
+- **Storage**: Database, stage, and failsafe storage analysis
+- **Warehouse Compute**: Credit consumption by warehouse with trend analysis
+- **Cloud Services**: Cloud services overhead monitoring and optimization insights
+- **Replication**: Replication credit tracking and data transfer analysis
+- **Clustering**: Automatic clustering cost analysis by table
+- **Serverless**: Serverless task execution monitoring
+- **AI Services**: Comprehensive AI services cost tracking (Cortex Functions, Analyst, Search, Intelligence/Agents, Fine-Tuning)
+- **Client Consumption**: Usage breakdown by client application
 
 ## Prerequisites
 
@@ -25,9 +27,114 @@ A comprehensive Streamlit application for monitoring and analyzing Snowflake acc
 - **Role Requirements**: Role with access to `SNOWFLAKE.ACCOUNT_USAGE` schema (typically `ACCOUNTADMIN` or custom role with granted privileges)
 - **Warehouse**: A warehouse to run the Streamlit app (XS warehouse is sufficient)
 
-## Installation
+## Deployment Options
 
-### Step 1: Upload the Application File
+### Option 1: Deploy from Git Repository (Recommended)
+
+This method syncs your Streamlit app with a Git repository for version control and easy updates.
+
+#### Step 1: Clone the Repository
+
+```bash
+git clone https://github.com/your-org/snowflake-account-usage-dashboard.git
+```
+
+#### Step 2: Create a Secret for GitHub Authentication
+
+Create a GitHub Personal Access Token (PAT) and store it as a secret in Snowflake:
+
+```sql
+USE ROLE ACCOUNTADMIN;
+
+CREATE OR REPLACE SECRET my_db.my_schema.github_secret
+  TYPE = password
+  USERNAME = 'your-github-username'
+  PASSWORD = 'ghp_your_personal_access_token';
+```
+
+#### Step 3: Create an API Integration for Git
+
+```sql
+CREATE OR REPLACE API INTEGRATION github_api_integration
+  API_PROVIDER = git_https_api
+  API_ALLOWED_PREFIXES = ('https://github.com/your-org')
+  ALLOWED_AUTHENTICATION_SECRETS = ALL
+  ENABLED = TRUE;
+```
+
+#### Step 4: Create the Git Repository Object
+
+```sql
+CREATE OR REPLACE GIT REPOSITORY my_db.my_schema.cost_dashboard_repo
+  API_INTEGRATION = github_api_integration
+  GIT_CREDENTIALS = my_db.my_schema.github_secret
+  ORIGIN = 'https://github.com/your-org/snowflake-account-usage-dashboard.git';
+
+-- Fetch the latest from the repository
+ALTER GIT REPOSITORY my_db.my_schema.cost_dashboard_repo FETCH;
+```
+
+#### Step 5: Set Up External Access Integration for PyPI
+
+The app requires packages from PyPI. Create a network rule and external access integration:
+
+```sql
+-- Create network rule for PyPI access
+CREATE OR REPLACE NETWORK RULE pypi_network_rule
+  MODE = EGRESS
+  TYPE = HOST_PORT
+  VALUE_LIST = ('pypi.org', 'pypi.python.org', 'pythonhosted.org', 'files.pythonhosted.org');
+
+-- Create external access integration
+CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION pypi_access_integration
+  ALLOWED_NETWORK_RULES = (pypi_network_rule)
+  ENABLED = true;
+
+-- Grant usage to your role
+GRANT USAGE ON INTEGRATION pypi_access_integration TO ROLE SYSADMIN;
+```
+
+**Alternative:** Use Snowflake's managed network rule:
+
+```sql
+CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION pypi_access_integration
+  ALLOWED_NETWORK_RULES = (snowflake.external_access.pypi_rule)
+  ENABLED = true;
+```
+
+#### Step 6: Create Streamlit App from Git Repository
+
+**Using Snowsight UI:**
+
+1. Sign in to Snowsight
+2. Navigate to **Projects » Streamlit**
+3. Click the dropdown next to **+ Streamlit** and select **Create from repository**
+4. For **File location in repository**, select:
+   - The repository (`cost_dashboard_repo`)
+   - The branch (`main` or `dev`)
+   - The file (`snowflake_cost_dashboard_V2.py`)
+5. For **App location**, select the database and schema
+6. For **Query warehouse** and **App warehouse**, select a warehouse (XS recommended)
+7. Click **Create**
+
+
+```
+
+#### Step 7: Add External Access Integration to App
+
+If you created the app via UI, add the PyPI integration:
+
+1. Open your Streamlit app in Snowsight
+2. Click **⋮** (more options) » **App settings**
+3. Go to **External networks** tab
+4. Select `pypi_access_integration`
+5. Click **Save**
+
+---
+
+### Option 2: Manual Deployment
+
+#### Step 1: Upload the Application File
 
 1. Log into your Snowflake account via Snowsight
 2. Navigate to **Projects -> Streamlit** in the left sidebar
@@ -38,15 +145,17 @@ A comprehensive Streamlit application for monitoring and analyzing Snowflake acc
 5. Name your app (e.g., `COST_MONITORING_DASHBOARD`)
 6. Click **Create**
 
-### Step 2: Deploy the Code
+#### Step 2: Deploy the Code
 
 1. Delete the default code in the editor
-2. Copy and paste the entire contents of `snowflake_cost_dashboard.py`
+2. Copy and paste the entire contents of `snowflake_cost_dashboard_V2.py`
 3. In the top left `Packages` menu, select **Python Version 3.11**
 4. In the same `Packages` menu, search and install: **pandas 2.3.2** , **plotly 6.3.0**
 5. In the same `Packages` menu, verify the latest versions are **snowflake-snowpark-python** and **streamlit** are installed
 6. Click **Run** in the top right corner
 7. You may need to refresh the streamlit app to ensure the packages installed - please allow 1-2 minutes for the app to initialize. You only will need to wait this long once.
+
+---
 
 ## Running the Application
 
@@ -86,7 +195,7 @@ Note that `ACCOUNT_USAGE` views have latency:
 - **Cortex Functions**: Function and model-level usage
 - **Cortex Analyst**: User-based analytics
 - **Cortex Search**: Search service consumption
-- **Document AI**: Document processing metrics
+- **Snowflake Intelligence/Agents**: Agent and tool usage tracking
 - **Fine-Tuning**: Model fine-tuning costs
 
 Each section includes:
@@ -147,6 +256,14 @@ Example test queries for warehouse compute and overall consumption are also prov
 **Solution**:
 - This is expected behavior. Simply refresh the page to reconnect.
 - The warehouse will auto-suspend after the WebSocket timeout to conserve credits.
+
+### PyPI Package Download Failed
+
+**Issue**: Error downloading packages from PyPI (DNS resolution failed)
+
+**Solution**:
+- Ensure the External Access Integration for PyPI is configured (see Step 5 in Git deployment)
+- Verify the integration is attached to your Streamlit app (see Step 7)
 
 ## Billing Considerations
 
