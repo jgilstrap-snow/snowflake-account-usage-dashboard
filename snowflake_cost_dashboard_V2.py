@@ -5,6 +5,8 @@ A comprehensive application for monitoring and analyzing Snowflake account usage
 across different service types with advanced projection capabilities and granular 
 consumption analysis.
 
+CODE VERSION: 2025-03-04-A (for debugging deployment)
+
 PERFORMANCE OPTIMIZATIONS:
 - AI Services queries now use cached results (1-hour TTL) for faster load times
 - All 6 AI service data fetches (Account-Level, Cortex Functions, Cortex Analyst, 
@@ -23,6 +25,29 @@ from typing import Dict, List, Optional, Union, Tuple
 import time
 from dataclasses import dataclass
 from enum import Enum
+
+def get_snowflake_session():
+    """Get Snowflake session - works in both container runtime (SPCS) and warehouse runtime (SiS)."""
+    if 'snowflake_session' not in st.session_state:
+        # Method 1: st.connection (SPCS and newer SiS versions)
+        if hasattr(st, 'connection'):
+            conn = st.connection("snowflake")
+            st.session_state.snowflake_session = conn.session()
+        else:
+            # Method 2: get_active_session (warehouse runtime / older SiS)
+            from snowflake.snowpark.context import get_active_session
+            st.session_state.snowflake_session = get_active_session()
+    return st.session_state.snowflake_session
+
+SESSION = None  # Will be initialized after set_page_config
+
+# Helper function for dataframes that works in both old and new Streamlit versions
+def render_dataframe(data, column_config=None, use_container_width=True, hide_index=True):
+    """Render dataframe with column_config/hide_index if supported (newer Streamlit), otherwise plain."""
+    try:
+        st.dataframe(data, column_config=column_config, use_container_width=use_container_width, hide_index=hide_index)
+    except TypeError:
+        st.dataframe(data, use_container_width=use_container_width)
 
 # Configure Plotly to use SVG renderer instead of WebGL for better compatibility
 import plotly.io as pio
@@ -48,6 +73,47 @@ def render_plotly_chart(fig, use_container_width=True, **kwargs):
     }
     config.update(kwargs.get('config', {}))
     return st.plotly_chart(fig, use_container_width=use_container_width, config=config)
+
+
+def normalize_snowflake_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize data types from Snowflake for cross-version Pandas/Snowpark compatibility.
+    Older Snowpark versions return Decimal types that don't aggregate correctly.
+    
+    Args:
+        df: DataFrame from Snowflake query
+        
+    Returns:
+        DataFrame with normalized numeric types
+    """
+    if df.empty:
+        return df
+    
+    df = df.copy()
+    
+    # Common numeric columns that need float conversion
+    numeric_cols = [
+        'CREDITS_USED', 'CREDITS_USED_COMPUTE', 'CREDITS_USED_CLOUD_SERVICES',
+        'TOTAL_CREDITS', 'COMPUTE_CREDITS', 'CLOUD_SERVICES_CREDITS',
+        'TOTAL_ELAPSED_TIME', 'BYTES_SCANNED', 'BYTES_WRITTEN',
+        'CREDITS_PER_QUERY', 'COST', 'CREDITS_BILLED', 'CREDITS',
+        'SERVERLESS_CREDITS', 'TOTAL_SERVERLESS_CREDITS', 'AVG_CREDITS',
+        'CREDITS_USED_QUERY_ACCELERATION', 'DATA_TRANSFER_CREDITS',
+        'INPUT_CREDITS', 'OUTPUT_CREDITS', 'TOKENS', 'REQUEST_COUNT',
+        'AVERAGE_DATABASE_BYTES', 'AVERAGE_FAILSAFE_BYTES'
+    ]
+    
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(float)
+    
+    # Convert date columns
+    date_cols = ['START_TIME', 'END_TIME', 'USAGE_DATE', 'DATE', 'START_DATE', 'END_DATE']
+    for col in date_cols:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+    
+    return df
 
 
 def format_credits_with_dollars(credits: float, credit_price: float = None) -> str:
@@ -146,22 +212,10 @@ def update_chart_with_time_range(fig, data: pd.DataFrame, date_column: str,
             title_with_range = f"{chart_title}<br><sub>Data Range: {time_range}</sub>"
             fig.update_layout(title=title_with_range)
 
-# Import for Snowflake Streamlit environment
-SNOWFLAKE_AVAILABLE = False
+# Snowflake session is already established via st.connection above
+# These flags are kept for backward compatibility with existing code
+SNOWFLAKE_AVAILABLE = True
 get_active_session = None
-
-try:
-    from snowflake.snowpark.context import get_active_session
-    from snowflake.snowpark import Session
-    SNOWFLAKE_AVAILABLE = True
-except ImportError:
-    pass
-
-try:
-    import snowflake.connector
-    from snowflake.connector import DictCursor
-except ImportError:
-    pass
 
 
 class ViewType(Enum):
@@ -887,16 +941,14 @@ class ServiceAnalyzer(ABC):
             display_columns.append('MOM_PERCENT_CHANGE')
         
         # Display table
-        st.dataframe(
+        render_dataframe(
             display_data[display_columns].sort_values(['USAGE_MONTH', 'TOTAL_CREDITS'], ascending=[False, False]),
             column_config={
                 'USAGE_MONTH': 'Month',
                 grouping_col: view_name,
-                'TOTAL_CREDITS': st.column_config.NumberColumn('Total Credits', format="%.2f"),
-                'MOM_PERCENT_CHANGE': st.column_config.NumberColumn('MoM Change (%)', format="%.2f")
-            },
-            use_container_width=True,
-            hide_index=True
+                'TOTAL_CREDITS': 'Total Credits',
+                'MOM_PERCENT_CHANGE': 'MoM Change (%)'
+            }
         )
         
         # Export functionality
@@ -1569,9 +1621,13 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         if data.empty:
             return
         
-        # Ensure consistent date handling
+        # Ensure consistent date and numeric handling for cross-version compatibility
         data = data.copy()
         data['START_TIME'] = pd.to_datetime(data['START_TIME'])
+        # Convert Decimal types to float for older Snowpark/Pandas compatibility
+        for col in ['CREDITS_USED_CLOUD_SERVICES', 'TOTAL_CREDITS', 'CLOUD_SERVICES_CREDITS', 'TOTAL_ELAPSED_TIME', 'BYTES_SCANNED']:
+            if col in data.columns:
+                data[col] = pd.to_numeric(data[col], errors='coerce').fillna(0)
         
         # Calculate summary metrics
         total_compute_credits = data['CREDITS_USED_COMPUTE'].sum()
@@ -1656,9 +1712,13 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         if data.empty:
             return
         
-        # Ensure consistent date handling
+        # Ensure consistent date and numeric handling for cross-version compatibility
         data = data.copy()
         data['START_TIME'] = pd.to_datetime(data['START_TIME'])
+        # Convert Decimal types to float for older Snowpark/Pandas compatibility
+        for col in ['CREDITS_USED_CLOUD_SERVICES', 'TOTAL_CREDITS', 'CLOUD_SERVICES_CREDITS', 'TOTAL_ELAPSED_TIME', 'BYTES_SCANNED']:
+            if col in data.columns:
+                data[col] = pd.to_numeric(data[col], errors='coerce').fillna(0)
         
         # Create tabs for different analyses
         tab1, tab2, tab3 = st.tabs(["Trends", "By Warehouse", "Daily Patterns"])
@@ -1835,7 +1895,11 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         with col1:
             hourly_stats['COST'] = hourly_stats['mean'] * credit_price
             max_cost = hourly_stats['COST'].max()
-            hourly_stats['intensity'] = hourly_stats['COST'] / max_cost
+            if max_cost > 0:
+                hourly_stats['intensity'] = hourly_stats['COST'] / max_cost
+            else:
+                hourly_stats['intensity'] = 0.5
+            hourly_stats['intensity'] = hourly_stats['intensity'].fillna(0.5)
             colors = [f'rgba(59, 130, 246, {0.3 + 0.7 * i})' for i in hourly_stats['intensity']]
             
             fig_hourly = go.Figure(data=go.Bar(
@@ -1857,7 +1921,11 @@ class ConsumptionAnalyzer(ServiceAnalyzer):
         with col2:
             daily_stats['COST'] = daily_stats['sum'] * credit_price
             max_daily = daily_stats['COST'].max()
-            daily_stats['intensity'] = daily_stats['COST'] / max_daily
+            if max_daily > 0:
+                daily_stats['intensity'] = daily_stats['COST'] / max_daily
+            else:
+                daily_stats['intensity'] = 0.5
+            daily_stats['intensity'] = daily_stats['intensity'].fillna(0.5)
             colors_daily = [f'rgba(34, 197, 94, {0.3 + 0.7 * i})' for i in daily_stats['intensity']]
             
             fig_daily = go.Figure(data=go.Bar(
@@ -2947,12 +3015,19 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         """Render cloud services trends over time."""
         st.markdown("#### Cloud Services Usage Trends")
         
+        # Ensure numeric types for aggregation compatibility
+        data = data.copy()
+        data['CREDITS_USED_CLOUD_SERVICES'] = pd.to_numeric(data['CREDITS_USED_CLOUD_SERVICES'], errors='coerce').fillna(0)
+        
         # Daily aggregation
         daily_data = data.groupby(data['START_TIME'].dt.date).agg({
             'CREDITS_USED_CLOUD_SERVICES': 'sum',
             'QUERY_ID': 'count'
         }).reset_index()
         daily_data.rename(columns={'QUERY_ID': 'QUERY_COUNT'}, inplace=True)
+        # Ensure chart-compatible numeric types
+        daily_data['CREDITS_USED_CLOUD_SERVICES'] = daily_data['CREDITS_USED_CLOUD_SERVICES'].astype(float)
+        daily_data['QUERY_COUNT'] = daily_data['QUERY_COUNT'].astype(int)
         
         col1, col2 = st.columns(2)
         
@@ -2988,13 +3063,20 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         """Render cloud services breakdown by warehouse."""
         st.markdown("#### Cloud Services by Warehouse")
         
+        # Ensure numeric types for aggregation compatibility
+        data = data.copy()
+        data['CREDITS_USED_CLOUD_SERVICES'] = pd.to_numeric(data['CREDITS_USED_CLOUD_SERVICES'], errors='coerce').fillna(0)
+        
         # Aggregate by warehouse
         warehouse_data = data.groupby('WAREHOUSE_NAME').agg({
             'CREDITS_USED_CLOUD_SERVICES': 'sum',
             'QUERY_ID': 'count'
         }).reset_index().sort_values('CREDITS_USED_CLOUD_SERVICES', ascending=False)
         warehouse_data.rename(columns={'QUERY_ID': 'QUERY_COUNT'}, inplace=True)
-        warehouse_data['CREDITS_PER_QUERY'] = warehouse_data['CREDITS_USED_CLOUD_SERVICES'] / warehouse_data['QUERY_COUNT']
+        # Ensure numeric types after aggregation
+        warehouse_data['CREDITS_USED_CLOUD_SERVICES'] = warehouse_data['CREDITS_USED_CLOUD_SERVICES'].astype(float)
+        warehouse_data['QUERY_COUNT'] = warehouse_data['QUERY_COUNT'].astype(int)
+        warehouse_data['CREDITS_PER_QUERY'] = warehouse_data['CREDITS_USED_CLOUD_SERVICES'] / warehouse_data['QUERY_COUNT'].replace(0, 1)
         
         col1, col2 = st.columns(2)
         
@@ -3032,40 +3114,52 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         display_data['CREDITS_FORMATTED'] = display_data['CREDITS_USED_CLOUD_SERVICES'].apply(lambda x: f"{x:,.4f}")
         display_data['CREDITS_PER_QUERY_FORMATTED'] = display_data['CREDITS_PER_QUERY'].apply(lambda x: f"{x:,.6f}")
         
-        st.dataframe(
+        render_dataframe(
             display_data[['WAREHOUSE_NAME', 'CREDITS_FORMATTED', 'QUERY_COUNT', 'CREDITS_PER_QUERY_FORMATTED']],
             column_config={
                 'WAREHOUSE_NAME': 'Warehouse Name',
                 'CREDITS_FORMATTED': 'Total Cloud Services Credits',
                 'QUERY_COUNT': 'Query Count',
                 'CREDITS_PER_QUERY_FORMATTED': 'Credits per Query'
-            },
-            use_container_width=True,
-            hide_index=True
+            }
         )
     
     def render_query_type_analysis(self, data: pd.DataFrame) -> None:
         """Render analysis by query type."""
         st.markdown("#### Cloud Services by Query Type")
         
-        credit_price = st.session_state.get('credit_price', 3.0)
+        # Debug: Show code version to verify deployment
+        st.caption("Code version: 2025-03-04-A")
         
-        # Aggregate by query type
+        credit_price = st.session_state.get('credit_price', 2.0)
+        
+        # Aggregate by query type - ensure numeric types for compatibility
+        data['CREDITS_USED_CLOUD_SERVICES'] = pd.to_numeric(data['CREDITS_USED_CLOUD_SERVICES'], errors='coerce').fillna(0)
+        data['TOTAL_ELAPSED_TIME'] = pd.to_numeric(data['TOTAL_ELAPSED_TIME'], errors='coerce')
+        
         query_type_data = data.groupby('QUERY_TYPE').agg({
             'CREDITS_USED_CLOUD_SERVICES': 'sum',
             'QUERY_ID': 'count',
             'TOTAL_ELAPSED_TIME': 'mean'
         }).reset_index().sort_values('CREDITS_USED_CLOUD_SERVICES', ascending=False)
         query_type_data.rename(columns={'QUERY_ID': 'QUERY_COUNT'}, inplace=True)
-        query_type_data['CREDITS_PER_QUERY'] = query_type_data['CREDITS_USED_CLOUD_SERVICES'] / query_type_data['QUERY_COUNT']
-        query_type_data['COST'] = query_type_data['CREDITS_USED_CLOUD_SERVICES'] * credit_price
+        
+        # Ensure numeric types after aggregation for chart compatibility
+        query_type_data['CREDITS_USED_CLOUD_SERVICES'] = pd.to_numeric(query_type_data['CREDITS_USED_CLOUD_SERVICES'], errors='coerce').fillna(0)
+        query_type_data['QUERY_COUNT'] = pd.to_numeric(query_type_data['QUERY_COUNT'], errors='coerce').fillna(0)
+        query_type_data['CREDITS_PER_QUERY'] = query_type_data['CREDITS_USED_CLOUD_SERVICES'] / query_type_data['QUERY_COUNT'].replace(0, 1)
+        query_type_data['COST'] = query_type_data['CREDITS_USED_CLOUD_SERVICES'].astype(float) * float(credit_price)
         
         col1, col2 = st.columns(2)
+        
+        # Prepare chart data with explicit list conversion for older Plotly compatibility
+        chart_data = query_type_data.copy()
+        chart_data['COST'] = chart_data['COST'].astype(float)
         
         with col1:
             # Cost by query type
             fig_type = px.pie(
-                query_type_data,
+                chart_data,
                 values='COST',
                 names='QUERY_TYPE',
                 title='Cloud Services Cost by Query Type'
@@ -3080,7 +3174,7 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         with col2:
             # Cost bar chart by type
             fig_cost = px.bar(
-                query_type_data,
+                chart_data,
                 x='QUERY_TYPE',
                 y='COST',
                 title='Cost by Query Type',
@@ -3102,7 +3196,7 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
         display_data['CREDITS_PER_QUERY_FORMATTED'] = display_data['CREDITS_PER_QUERY'].apply(lambda x: f"{x:,.6f}")
         display_data['AVG_ELAPSED_TIME'] = display_data['TOTAL_ELAPSED_TIME'].apply(lambda x: f"{x:,.0f} ms" if not pd.isna(x) else "N/A")
         
-        st.dataframe(
+        render_dataframe(
             display_data[['QUERY_TYPE', 'COST_FORMATTED', 'CREDITS_FORMATTED', 'QUERY_COUNT', 'CREDITS_PER_QUERY_FORMATTED', 'AVG_ELAPSED_TIME']],
             column_config={
                 'QUERY_TYPE': 'Query Type',
@@ -3111,9 +3205,7 @@ class CloudServicesAnalyzer(ServiceAnalyzer):
                 'QUERY_COUNT': 'Query Count',
                 'CREDITS_PER_QUERY_FORMATTED': 'Credits per Query',
                 'AVG_ELAPSED_TIME': 'Avg Elapsed Time'
-            },
-            use_container_width=True,
-            hide_index=True
+            }
         )
     
     def render_cloud_services_optimization(self, data: pd.DataFrame) -> None:
@@ -3516,7 +3608,7 @@ class ReplicationAnalyzer(ServiceAnalyzer):
         display_data['DATA_TRANSFERRED_FORMATTED'] = display_data['BYTES_TRANSFERRED_GB'].apply(lambda x: f"{x:,.2f} GB")
         display_data['CREDITS_PER_SESSION_FORMATTED'] = display_data['CREDITS_PER_SESSION'].apply(lambda x: f"{x:,.6f}")
         
-        st.dataframe(
+        render_dataframe(
             display_data[['REPLICATION_GROUP_NAME', 'COST_FORMATTED', 'CREDITS_FORMATTED', 'DATA_TRANSFERRED_FORMATTED', 
                          'SESSION_COUNT', 'CREDITS_PER_SESSION_FORMATTED']],
             column_config={
@@ -3526,9 +3618,7 @@ class ReplicationAnalyzer(ServiceAnalyzer):
                 'DATA_TRANSFERRED_FORMATTED': 'Data Transferred',
                 'SESSION_COUNT': 'Sessions',
                 'CREDITS_PER_SESSION_FORMATTED': 'Credits per Session'
-            },
-            use_container_width=True,
-            hide_index=True
+            }
         )
     
     def render_data_transfer_analysis(self, data: pd.DataFrame) -> None:
@@ -3969,7 +4059,7 @@ class ClusteringAnalyzer(ServiceAnalyzer):
         display_data['ROWS_RECLUSTERED_FORMATTED'] = display_data['NUM_ROWS_RECLUSTERED'].apply(lambda x: f"{x:,.0f}")
         display_data['CREDITS_PER_OP_FORMATTED'] = display_data['CREDITS_PER_OPERATION'].apply(lambda x: f"{x:,.6f}")
         
-        st.dataframe(
+        render_dataframe(
             display_data[['FULL_TABLE_NAME', 'COST_FORMATTED', 'CREDITS_FORMATTED', 'DATA_RECLUSTERED_FORMATTED', 
                          'ROWS_RECLUSTERED_FORMATTED', 'OPERATION_COUNT', 'CREDITS_PER_OP_FORMATTED']],
             column_config={
@@ -3980,9 +4070,7 @@ class ClusteringAnalyzer(ServiceAnalyzer):
                 'ROWS_RECLUSTERED_FORMATTED': 'Rows Reclustered',
                 'OPERATION_COUNT': 'Operations',
                 'CREDITS_PER_OP_FORMATTED': 'Credits per Operation'
-            },
-            use_container_width=True,
-            hide_index=True
+            }
         )
     
     def render_clustering_operations_analysis(self, data: pd.DataFrame) -> None:
@@ -4439,7 +4527,7 @@ class ServerlessAnalyzer(ServiceAnalyzer):
         display_data['DURATION_FORMATTED'] = display_data['DURATION_MINUTES'].apply(lambda x: f"{x:.1f} min")
         display_data['CREDITS_PER_EXEC_FORMATTED'] = display_data['CREDITS_PER_EXECUTION'].apply(lambda x: f"{x:,.6f}")
         
-        st.dataframe(
+        render_dataframe(
             display_data[['FULL_TASK_NAME', 'COST_FORMATTED', 'CREDITS_FORMATTED', 'EXECUTION_COUNT', 
                          'DURATION_FORMATTED', 'CREDITS_PER_EXEC_FORMATTED']],
             column_config={
@@ -4449,9 +4537,7 @@ class ServerlessAnalyzer(ServiceAnalyzer):
                 'EXECUTION_COUNT': 'Executions',
                 'DURATION_FORMATTED': 'Avg Duration',
                 'CREDITS_PER_EXEC_FORMATTED': 'Credits per Execution'
-            },
-            use_container_width=True,
-            hide_index=True
+            }
         )
     
     def render_serverless_performance_analysis(self, data: pd.DataFrame) -> None:
@@ -4999,7 +5085,7 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
         display_data['COST_FORMATTED'] = display_data['TOTAL_COST'].apply(lambda x: f"${x:,.2f}")
         display_data['CREDITS_PER_QUERY_FORMATTED'] = display_data['CREDITS_PER_QUERY'].apply(lambda x: f"{x:,.6f}")
         
-        st.dataframe(
+        render_dataframe(
             display_data[['CLIENT_APPLICATION_NAME', 'CREDITS_FORMATTED', 'COST_FORMATTED', 'QUERY_COUNT', 
                          'USER_COUNT', 'CREDITS_PER_QUERY_FORMATTED']],
             column_config={
@@ -5009,9 +5095,7 @@ class ClientConsumptionAnalyzer(ServiceAnalyzer):
                 'QUERY_COUNT': 'Query Count',
                 'USER_COUNT': 'Users',
                 'CREDITS_PER_QUERY_FORMATTED': 'Credits per Query'
-            },
-            use_container_width=True,
-            hide_index=True
+            }
         )
     
     def render_user_client_analysis(self, data: pd.DataFrame) -> None:
@@ -5667,12 +5751,7 @@ class AIServicesAnalyzer:
             cols_to_show = ['Service', 'Model', 'Input (M)', 'Output (M)', 'Cache Read (M)', 'Cache Write (M)',
                            'Input Cost', 'Output Cost', 'Cache Read Cost', 'Cache Write Cost', 'Total Credits', 'Total Cost']
             
-            st.dataframe(
-                display_df[cols_to_show],
-                use_container_width=True,
-                hide_index=True,
-                height=min(400, len(display_df) * 35 + 50)
-            )
+            render_dataframe(display_df[cols_to_show])
 
         else:
             agent_agg = data.groupby('AGENT_NAME').agg({
@@ -5713,12 +5792,7 @@ class AIServicesAnalyzer:
             display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
             display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
             
-            st.dataframe(
-                display_df[['Agent', 'Requests', 'Tokens', 'Credits', 'Cost']],
-                use_container_width=True,
-                hide_index=True,
-                height=min(400, len(display_df) * 35 + 50)
-            )
+            render_dataframe(display_df[['Agent', 'Requests', 'Tokens', 'Credits', 'Cost']])
     
     def _get_cortex_agents_data(self) -> Optional[pd.DataFrame]:
         """
@@ -5933,12 +6007,7 @@ class AIServicesAnalyzer:
             cols_to_show = ['Service', 'Model', 'Input (M)', 'Output (M)', 'Cache Read (M)', 'Cache Write (M)',
                            'Input Cost', 'Output Cost', 'Cache Read Cost', 'Cache Write Cost', 'Total Credits', 'Total Cost']
             
-            st.dataframe(
-                display_df[cols_to_show],
-                use_container_width=True,
-                hide_index=True,
-                height=min(400, len(display_df) * 35 + 50)
-            )
+            render_dataframe(display_df[cols_to_show])
 
         else:
             data = data.copy()
@@ -5981,12 +6050,7 @@ class AIServicesAnalyzer:
             display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
             display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
             
-            st.dataframe(
-                display_df[['Agent', 'Requests', 'Tokens', 'Credits', 'Cost']],
-                use_container_width=True,
-                hide_index=True,
-                height=min(400, len(display_df) * 35 + 50)
-            )
+            render_dataframe(display_df[['Agent', 'Requests', 'Tokens', 'Credits', 'Cost']])
     
     def _get_cortex_functions_data(self) -> Optional[pd.DataFrame]:
         """
@@ -6208,12 +6272,7 @@ class AIServicesAnalyzer:
         
         # Display table
         display_cols = ['Function Name', 'Model Name', 'Total Credits', 'Usage Count', 'Date Range']
-        st.dataframe(
-            table_agg[display_cols],
-            use_container_width=True,
-            hide_index=True,
-            height=400
-        )
+        render_dataframe(table_agg[display_cols])
     
     def _get_cortex_analyst_data(self) -> Optional[pd.DataFrame]:
         """
@@ -6361,12 +6420,7 @@ class AIServicesAnalyzer:
         
         # Display table
         display_cols = ['Username', 'Total Credits', 'Request Count', 'Date Range']
-        st.dataframe(
-            table_agg[display_cols],
-            use_container_width=True,
-            hide_index=True,
-            height=400
-        )
+        render_dataframe(table_agg[display_cols])
     
     def _get_cortex_search_data(self) -> Optional[pd.DataFrame]:
         """
@@ -6535,12 +6589,7 @@ class AIServicesAnalyzer:
         
         # Display table
         display_cols = ['Database', 'Schema', 'Service Name', 'Consumption Type', 'Total Credits', 'Date Range']
-        st.dataframe(
-            table_agg[display_cols],
-            use_container_width=True,
-            hide_index=True,
-            height=400
-        )
+        render_dataframe(table_agg[display_cols])
     
     def _get_document_ai_data(self) -> Optional[pd.DataFrame]:
         """
@@ -6701,12 +6750,7 @@ class AIServicesAnalyzer:
         
         # Display table
         display_cols = ['Operation Name', 'Total Credits', 'Total Pages', 'Total Documents', 'Date Range']
-        st.dataframe(
-            table_agg[display_cols],
-            use_container_width=True,
-            hide_index=True,
-            height=400
-        )
+        render_dataframe(table_agg[display_cols])
     
     def _get_fine_tuning_data(self) -> Optional[pd.DataFrame]:
         """
@@ -6855,12 +6899,7 @@ class AIServicesAnalyzer:
         
         # Display table
         display_cols = ['Model Name', 'Total Credits', 'Usage Count', 'Date Range']
-        st.dataframe(
-            table_agg[display_cols],
-            use_container_width=True,
-            hide_index=True,
-            height=400
-        )
+        render_dataframe(table_agg[display_cols])
     
     def _get_cortex_rest_api_data(self) -> Optional[pd.DataFrame]:
         """
@@ -7172,12 +7211,7 @@ class AIServicesAnalyzer:
                         'Cache Read (M)', 'Cache Read Rate', 'Cache Write (M)', 'Cache Write Rate', 
                         'Input Cost', 'Output Cost', 'Cache Read Cost', 'Cache Write Cost', 'Total Cost']
         
-        st.dataframe(
-            display_df[cols_to_show],
-            use_container_width=True,
-            hide_index=True,
-            height=min(400, len(display_df) * 35 + 50)
-        )
+        render_dataframe(display_df[cols_to_show])
     
     def _format_credits(self, credits: float) -> str:
         """
@@ -7233,35 +7267,15 @@ class DataAccessManager:
         self._initialize_connection()
     
     def _initialize_connection(self):
-        """Initialize connection based on environment (Snowflake Streamlit vs external)."""
+        """Initialize connection using global SESSION established at startup."""
         try:
-            if SNOWFLAKE_AVAILABLE:
-                # Try Snowflake Streamlit environment first
-                try:
-                    self.session = get_active_session()
-                    self.connection_type = "snowpark_session"
-                    st.session_state.connection_info = "Connected via Snowflake Streamlit Session"
-                    self.session.sql("USE WAREHOUSE AICOLLEGE").collect()
-                    st.session_state.connection_validated = True
-                    self._connection_validated = True
-                    return
-                except Exception:
-                    pass
-            
-            # Fallback for local development - create Snowpark session from connection name
-            from snowflake.snowpark import Session
-            import os
-            conn_name = os.getenv("SNOWFLAKE_CONNECTION_NAME") or "jgilstrap_demo"
-            self.session = Session.builder.config("connection_name", conn_name).create()
-            self.session.sql("USE ROLE SYSADMIN").collect()
-            self.session.sql("USE WAREHOUSE AICOLLEGE").collect()
+            self.session = SESSION
             self.connection_type = "snowpark_session"
-            st.session_state.connection_info = "Connected via local Snowpark Session"
+            st.session_state.connection_info = "Connected via st.connection('snowflake')"
             st.session_state.connection_validated = True
             self._connection_validated = True
-                
         except Exception as e:
-            st.session_state.connection_info = f"Connection initialization failed: {str(e)}"
+            st.session_state.connection_info = f"Connection failed: {str(e)}"
             self.connection_type = None
     
     def validate_connection(self) -> bool:
@@ -7356,7 +7370,8 @@ class DataAccessManager:
                 if self.connection_type == "snowpark_session":
                     # Use Snowpark session (preferred for Snowflake Streamlit)
                     result = self.session.sql(query).to_pandas()
-                    return result
+                    # Normalize data types for cross-version Pandas/Snowpark compatibility
+                    return normalize_snowflake_data(result)
                     
                 elif self.connection_type == "external_connector" and hasattr(self, '_external_conn'):
                     # Fallback for external connections (development only)
@@ -7365,7 +7380,9 @@ class DataAccessManager:
                     columns = [desc[0] for desc in cursor.description] if cursor.description else []
                     data = cursor.fetchall()
                     cursor.close()
-                    return pd.DataFrame(data, columns=columns)
+                    result = pd.DataFrame(data, columns=columns)
+                    # Normalize data types for cross-version Pandas/Snowpark compatibility
+                    return normalize_snowflake_data(result)
                 else:
                     st.error("❌ No valid connection available")
                     return None
@@ -7527,6 +7544,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+SESSION = get_snowflake_session()
 
 class SnowflakeUsageDashboard:
     """Main application controller for the Snowflake usage dashboard."""
@@ -7747,19 +7766,11 @@ class SnowflakeUsageDashboard:
                     }
                 </style>
             """, unsafe_allow_html=True)
-            # Get persisted credit price from URL params on first load only
             if 'credit_price' not in st.session_state:
-                if 'credit_price' in st.query_params:
-                    try:
-                        st.session_state.credit_price = float(st.query_params['credit_price'])
-                    except ValueError:
-                        st.session_state.credit_price = 2.00
-                else:
-                    st.session_state.credit_price = 2.00
+                st.session_state.credit_price = 2.00
             
             def on_credit_price_change():
                 st.session_state.credit_price = st.session_state.credit_price_input
-                st.query_params['credit_price'] = str(st.session_state.credit_price_input)
             
             st.number_input(
                 "Credit Price ($)",
@@ -8595,19 +8606,17 @@ class SnowflakeUsageDashboard:
         display_data['CLOUD_SERVICES_CREDITS'] = display_data['CLOUD_SERVICES_CREDITS'].round(2)
         
         # Display table
-        st.dataframe(
+        render_dataframe(
             display_data[['USAGE_DATE', 'SERVICE_TYPE', 'TOTAL_CREDITS', 'COMPUTE_CREDITS', 
                          'CLOUD_SERVICES_CREDITS', 'PERIOD']],
             column_config={
                 'USAGE_DATE': 'Date',
                 'SERVICE_TYPE': 'Service Type',
-                'TOTAL_CREDITS': st.column_config.NumberColumn('Total Credits', format="%.2f"),
-                'COMPUTE_CREDITS': st.column_config.NumberColumn('Compute Credits', format="%.2f"),
-                'CLOUD_SERVICES_CREDITS': st.column_config.NumberColumn('Cloud Services Credits', format="%.2f"),
+                'TOTAL_CREDITS': 'Total Credits',
+                'COMPUTE_CREDITS': 'Compute Credits',
+                'CLOUD_SERVICES_CREDITS': 'Cloud Services Credits',
                 'PERIOD': 'Period'
-            },
-            use_container_width=True,
-            hide_index=True
+            }
         )
         
         # Export functionality
@@ -8759,14 +8768,6 @@ class SnowflakeUsageDashboard:
 
 def main():
     """Application entry point."""
-    # Configure Streamlit page
-    st.set_page_config(
-        page_title="Snowflake Cost Dashboard",
-        page_icon="",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
     # Initialize and run the dashboard
     dashboard = SnowflakeUsageDashboard()
     dashboard.run()
