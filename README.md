@@ -12,6 +12,8 @@ A comprehensive Streamlit application for monitoring and analyzing Snowflake acc
 
 10/22 - Added `snowflake_cost_dashboard_V2.py` that includes a cache layer for the AI Services tab and speeds up subsequent page loads
 
+4/9 - Added Cortex Code usage in the AI Services tab. Added the new AI Credit pricing for Snowflake Intelligence, Cortex Agents, and Cortex Code.
+
 ## Features
 
 - **Overview**: Account-wide cost summary with yearly projections and monthly trends
