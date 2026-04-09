@@ -5692,7 +5692,7 @@ class AIServicesAnalyzer:
         
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            st.metric("Total AI Credits", f"{total_credits:,.4f}")
+            st.metric("Total AI Credits", f"{total_credits:,.2f}")
         with col2:
             st.metric("Estimated Cost", f"${total_cost:,.2f}")
         with col3:
@@ -5782,17 +5782,17 @@ class AIServicesAnalyzer:
             
             st.markdown("##### Usage by Service and Model")
             display_df = model_agg.copy()
-            display_df['Input (M)'] = display_df['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
-            display_df['Output (M)'] = display_df['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
+            display_df['Input (M)'] = display_df['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.2f}")
+            display_df['Output (M)'] = display_df['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.2f}")
             display_df['Cache Read (M)'] = display_df.apply(
-                lambda row: f"{row['Cache Read Tokens']/1_000_000:,.4f}" if row['Cache Read Tokens'] > 0 else "", axis=1)
+                lambda row: f"{row['Cache Read Tokens']/1_000_000:,.2f}" if row['Cache Read Tokens'] > 0 else "", axis=1)
             display_df['Cache Write (M)'] = display_df.apply(
-                lambda row: f"{row['Cache Write Tokens']/1_000_000:,.4f}" if row['Cache Write Tokens'] > 0 else "", axis=1)
+                lambda row: f"{row['Cache Write Tokens']/1_000_000:,.2f}" if row['Cache Write Tokens'] > 0 else "", axis=1)
             display_df['Input Cost'] = display_df['Input Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
             display_df['Output Cost'] = display_df['Output Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
             display_df['Cache Read Cost'] = display_df['Cache Read Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
             display_df['Cache Write Cost'] = display_df['Cache Write Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
-            display_df['Total AI Credits'] = display_df['Total Credits'].apply(lambda x: f"{x:,.4f}")
+            display_df['Total AI Credits'] = display_df['Total Credits'].apply(lambda x: f"{x:,.2f}")
             display_df['Total Cost'] = display_df['Total Cost'].apply(lambda x: f"${x:,.2f}")
             
             cols_to_show = ['Service', 'Model', 'Input (M)', 'Output (M)', 'Cache Read (M)', 'Cache Write (M)',
@@ -5835,7 +5835,7 @@ class AIServicesAnalyzer:
             display_df = agent_agg.copy()
             display_df = display_df.sort_values('Cost', ascending=False)
             display_df['Tokens'] = display_df['Tokens'].apply(lambda x: f"{x:,.0f}")
-            display_df['AI Credits'] = display_df['AI Credits'].apply(lambda x: f"{x:,.4f}")
+            display_df['AI Credits'] = display_df['AI Credits'].apply(lambda x: f"{x:,.2f}")
             display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
             display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
             
@@ -5987,7 +5987,7 @@ class AIServicesAnalyzer:
         
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            st.metric("Total AI Credits", f"{total_credits:,.4f}")
+            st.metric("Total AI Credits", f"{total_credits:,.2f}")
         with col2:
             st.metric("Estimated Cost", f"${total_cost:,.2f}")
         with col3:
@@ -6077,17 +6077,17 @@ class AIServicesAnalyzer:
             
             st.markdown("##### Usage by Service and Model")
             display_df = model_agg.copy()
-            display_df['Input (M)'] = display_df['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
-            display_df['Output (M)'] = display_df['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
+            display_df['Input (M)'] = display_df['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.2f}")
+            display_df['Output (M)'] = display_df['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.2f}")
             display_df['Cache Read (M)'] = display_df.apply(
-                lambda row: f"{row['Cache Read Tokens']/1_000_000:,.4f}" if row['Cache Read Tokens'] > 0 else "", axis=1)
+                lambda row: f"{row['Cache Read Tokens']/1_000_000:,.2f}" if row['Cache Read Tokens'] > 0 else "", axis=1)
             display_df['Cache Write (M)'] = display_df.apply(
-                lambda row: f"{row['Cache Write Tokens']/1_000_000:,.4f}" if row['Cache Write Tokens'] > 0 else "", axis=1)
+                lambda row: f"{row['Cache Write Tokens']/1_000_000:,.2f}" if row['Cache Write Tokens'] > 0 else "", axis=1)
             display_df['Input Cost'] = display_df['Input Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
             display_df['Output Cost'] = display_df['Output Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
             display_df['Cache Read Cost'] = display_df['Cache Read Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
             display_df['Cache Write Cost'] = display_df['Cache Write Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
-            display_df['Total AI Credits'] = display_df['Total Credits'].apply(lambda x: f"{x:,.4f}")
+            display_df['Total AI Credits'] = display_df['Total Credits'].apply(lambda x: f"{x:,.2f}")
             display_df['Total Cost'] = display_df['Total Cost'].apply(lambda x: f"${x:,.2f}")
             
             cols_to_show = ['Service', 'Model', 'Input (M)', 'Output (M)', 'Cache Read (M)', 'Cache Write (M)',
@@ -6132,7 +6132,7 @@ class AIServicesAnalyzer:
             display_df = agent_agg.copy()
             display_df = display_df.sort_values('Cost', ascending=False)
             display_df['Tokens'] = display_df['Tokens'].apply(lambda x: f"{x:,.0f}")
-            display_df['AI Credits'] = display_df['AI Credits'].apply(lambda x: f"{x:,.4f}")
+            display_df['AI Credits'] = display_df['AI Credits'].apply(lambda x: f"{x:,.2f}")
             display_df['Cost'] = display_df['Cost'].apply(lambda x: f"${x:,.2f}")
             display_df['Requests'] = display_df['Requests'].apply(lambda x: f"{x:,}")
             
@@ -7443,7 +7443,7 @@ class AIServicesAnalyzer:
 
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            st.metric("Total AI Credits", f"{total_credits:,.4f}")
+            st.metric("Total AI Credits", f"{total_credits:,.2f}")
         with col2:
             st.metric("Estimated Cost", f"${total_cost:,.2f}")
         with col3:
@@ -7555,7 +7555,7 @@ class AIServicesAnalyzer:
 
         display_us = user_source.copy()
         display_us['Tokens (M)'] = display_us['Tokens'].apply(lambda x: f"{x/1_000_000:,.2f}")
-        display_us['AI Credits'] = display_us['AI Credits'].apply(lambda x: f"{x:,.4f}")
+        display_us['AI Credits'] = display_us['AI Credits'].apply(lambda x: f"{x:,.2f}")
         display_us['Cost'] = display_us['Cost'].apply(lambda x: f"${x:,.2f}")
         display_us['Requests'] = display_us['Requests'].apply(lambda x: f"{x:,}")
         render_dataframe(display_us[['User', 'Interface', 'Requests', 'Tokens (M)', 'AI Credits', 'Cost']])
@@ -7599,20 +7599,25 @@ class AIServicesAnalyzer:
 
             st.markdown("##### Token Details by Model")
             display_df = model_agg.copy()
-            display_df['Input (M)'] = display_df['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
-            display_df['Output (M)'] = display_df['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
+            display_df['Input (M)'] = display_df['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.2f}")
+            display_df['Output (M)'] = display_df['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.2f}")
             display_df['Cache Read (M)'] = display_df.apply(
-                lambda row: f"{row['Cache Read Tokens']/1_000_000:,.4f}" if row['Cache Read Tokens'] > 0 else "", axis=1)
+                lambda row: f"{row['Cache Read Tokens']/1_000_000:,.2f}" if row['Cache Read Tokens'] > 0 else "", axis=1)
             display_df['Cache Write (M)'] = display_df.apply(
-                lambda row: f"{row['Cache Write Tokens']/1_000_000:,.4f}" if row['Cache Write Tokens'] > 0 else "", axis=1)
+                lambda row: f"{row['Cache Write Tokens']/1_000_000:,.2f}" if row['Cache Write Tokens'] > 0 else "", axis=1)
+            display_df['Input Cred.'] = display_df['Input Credits'].apply(lambda x: f"{x:,.2f}" if x > 0 else "")
+            display_df['Output Cred.'] = display_df['Output Credits'].apply(lambda x: f"{x:,.2f}" if x > 0 else "")
+            display_df['Cache Read Cred.'] = display_df['Cache Read Credits'].apply(lambda x: f"{x:,.2f}" if x > 0 else "")
+            display_df['Cache Write Cred.'] = display_df['Cache Write Credits'].apply(lambda x: f"{x:,.2f}" if x > 0 else "")
             display_df['Input Cost'] = display_df['Input Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
             display_df['Output Cost'] = display_df['Output Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
             display_df['Cache Read Cost'] = display_df['Cache Read Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
             display_df['Cache Write Cost'] = display_df['Cache Write Credits'].apply(lambda x: f"${x * ai_credit_price:,.2f}" if x > 0 else "")
-            display_df['Total AI Credits'] = display_df['Total AI Credits'].apply(lambda x: f"{x:,.4f}")
+            display_df['Total AI Credits'] = display_df['Total AI Credits'].apply(lambda x: f"{x:,.2f}")
             display_df['Total Cost'] = display_df['Total Cost'].apply(lambda x: f"${x:,.2f}")
 
             cols_to_show = ['Model', 'Input (M)', 'Output (M)', 'Cache Read (M)', 'Cache Write (M)',
+                           'Input Cred.', 'Output Cred.', 'Cache Read Cred.', 'Cache Write Cred.',
                            'Input Cost', 'Output Cost', 'Cache Read Cost', 'Cache Write Cost', 'Total AI Credits', 'Total Cost']
             render_dataframe(display_df[cols_to_show])
 
@@ -7633,16 +7638,21 @@ class AIServicesAnalyzer:
             user_model_agg = user_model_agg.sort_values('Total Cost', ascending=False)
 
             display_um = user_model_agg.copy()
-            display_um['Input (M)'] = display_um['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
-            display_um['Output (M)'] = display_um['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.4f}")
+            display_um['Input (M)'] = display_um['Input Tokens'].apply(lambda x: f"{x/1_000_000:,.2f}")
+            display_um['Output (M)'] = display_um['Output Tokens'].apply(lambda x: f"{x/1_000_000:,.2f}")
             display_um['Cache Read (M)'] = display_um.apply(
-                lambda row: f"{row['Cache Read Tokens']/1_000_000:,.4f}" if row['Cache Read Tokens'] > 0 else "", axis=1)
+                lambda row: f"{row['Cache Read Tokens']/1_000_000:,.2f}" if row['Cache Read Tokens'] > 0 else "", axis=1)
             display_um['Cache Write (M)'] = display_um.apply(
-                lambda row: f"{row['Cache Write Tokens']/1_000_000:,.4f}" if row['Cache Write Tokens'] > 0 else "", axis=1)
-            display_um['Total AI Credits'] = display_um['Total AI Credits'].apply(lambda x: f"{x:,.4f}")
+                lambda row: f"{row['Cache Write Tokens']/1_000_000:,.2f}" if row['Cache Write Tokens'] > 0 else "", axis=1)
+            display_um['Input Cred.'] = display_um['Input Credits'].apply(lambda x: f"{x:,.2f}" if x > 0 else "")
+            display_um['Output Cred.'] = display_um['Output Credits'].apply(lambda x: f"{x:,.2f}" if x > 0 else "")
+            display_um['Cache Read Cred.'] = display_um['Cache Read Credits'].apply(lambda x: f"{x:,.2f}" if x > 0 else "")
+            display_um['Cache Write Cred.'] = display_um['Cache Write Credits'].apply(lambda x: f"{x:,.2f}" if x > 0 else "")
+            display_um['Total AI Credits'] = display_um['Total AI Credits'].apply(lambda x: f"{x:,.2f}")
             display_um['Total Cost'] = display_um['Total Cost'].apply(lambda x: f"${x:,.2f}")
 
             cols_to_show = ['User', 'Source', 'Model', 'Input (M)', 'Output (M)', 'Cache Read (M)', 'Cache Write (M)',
+                           'Input Cred.', 'Output Cred.', 'Cache Read Cred.', 'Cache Write Cred.',
                            'Total AI Credits', 'Total Cost']
             render_dataframe(display_um[cols_to_show])
 
